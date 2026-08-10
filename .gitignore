@@ -1,0 +1,24 @@
+# environments
+.venv*/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# generated training data & artifacts (rebuild with comas.synthetic / comas.realpairs)
+data/
+data_holdout/
+all_shots/
+checkpoints/
+cache/
+
+# inference outputs
+ranked*.csv
+copilot_ranked.csv
+holdout_*.csv
+data_pos.csv
+data_neg.csv
+
+# OS / editor
+.DS_Store
+.vscode/
+.claude/

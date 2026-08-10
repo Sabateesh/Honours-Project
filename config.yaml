@@ -1,0 +1,29 @@
+data:
+  root: data/
+  img_size: 512
+  num_workers: 4
+  batch_size: 16
+  val_frac: 0.15
+  test_frac: 0.15
+  seed: 42
+
+model:
+  use_ocr: false
+  cnn_backbone: resnet50
+  text_encoder: sentence-transformers/all-MiniLM-L6-v2
+  fusion_hidden: 256
+  dropout: 0.3
+
+train:
+  epochs: 10
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  pos_weight_auto: true
+  pos_weight_override: null
+
+paths:
+  checkpoint: checkpoints/best.pt
+  ocr_cache: cache/ocr.json
+
+logging:
+  level: INFO
