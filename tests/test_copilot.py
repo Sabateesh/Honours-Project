@@ -1,12 +1,136 @@
 from pathlib import Path
 
 from comas.copilot import (
+    CopilotDetector,
     CopilotEvidence,
     find_keywords,
     infer_tool,
+    ml_is_confident,
     score_from_keywords,
     write_csv,
 )
+
+
+class _CountingCache:
+    """Stands in for OCRCache so tests can assert whether OCR was reached."""
+
+    def __init__(self, text=""):
+        self.text = text
+        self.calls = 0
+
+    def get_or_extract(self, path, region=None):
+        self.calls += 1
+        return self.text
+
+
+def test_confident_model_skips_ocr():
+    cache = _CountingCache("GitHub Copilot")
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.95)
+    ev = det.detect(Path("x.png"))
+    assert cache.calls == 0
+    assert ev.score == 0.95 and ev.method == "ml"
+
+
+def test_unconfident_model_still_runs_ocr():
+    cache = _CountingCache("GitHub Copilot")
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.85)
+    ev = det.detect(Path("x.png"))
+    assert cache.calls == 1
+    assert ev.score == 0.95 and ev.method == "ocr_strong"
+
+
+def test_low_model_score_never_suppresses_ocr():
+    # the model only learned ghost text, so it must not veto an open chat panel
+    cache = _CountingCache("GitHub Copilot")
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.02)
+    ev = det.detect(Path("x.png"))
+    assert cache.calls == 1
+    assert ev.score == 0.95
+
+
+class _FakeTensor:
+    def __init__(self, vals):
+        self.vals = vals
+
+    def to(self, device):
+        return self
+
+    def cpu(self):
+        return self
+
+    def __iter__(self):
+        return iter(self.vals)
+
+
+class _FakeTorch:
+    class _NoGrad:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def no_grad(self):
+        return self._NoGrad()
+
+    def stack(self, xs):
+        return _FakeTensor(xs)
+
+    def zeros(self, n, d, device=None):
+        return _FakeTensor([0.0] * n)
+
+    def sigmoid(self, x):
+        return x
+
+
+def test_score_batch_chunks_and_keys_by_path(tmp_path):
+    from PIL import Image
+    from comas.copilot import MLScorer
+
+    paths = []
+    for i in range(5):
+        p = tmp_path / f"s{i}.png"
+        Image.new("RGB", (8, 8), (i, 0, 0)).save(p)
+        paths.append(p)
+
+    def model(x, t):
+        return _FakeTensor([0.5] * len(list(x.vals)))
+
+    scorer = MLScorer(model, lambda img: 0, device=None, torch_mod=_FakeTorch())
+    scorer.BATCH = 2  # force chunking: 5 images -> 3 forward passes
+    ticks = []
+    out = scorer.score_batch(paths, progress=lambda d, t: ticks.append((d, t)))
+    assert set(out) == {str(p) for p in paths}
+    assert all(v == 0.5 for v in out.values())
+    assert ticks == [(2, 5), (4, 5), (5, 5)]
+
+
+def test_score_batch_survives_unreadable_file(tmp_path):
+    from PIL import Image
+    from comas.copilot import MLScorer
+
+    good = tmp_path / "good.png"
+    Image.new("RGB", (8, 8)).save(good)
+    bad = tmp_path / "missing.png"  # never created
+
+    def model(x, t):
+        return _FakeTensor([0.9] * len(list(x.vals)))
+
+    def tfms(img):
+        return 0
+
+    scorer = MLScorer(model, tfms, device=None, torch_mod=_FakeTorch())
+    out = scorer.score_batch([good, bad])
+    assert out[str(good)] == 0.9
+    assert out[str(bad)] == 0.0  # scored safe-low, not crashed
+
+
+def test_ml_is_confident_bounds():
+    assert ml_is_confident(0.90)
+    assert ml_is_confident(0.99)
+    assert not ml_is_confident(0.89)
+    assert not ml_is_confident(0.0)
+    assert not ml_is_confident(None)
 
 def test_find_keywords_copilot_strong():
     text = "Status: GitHub Copilot is running. Tab to accept."

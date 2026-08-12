@@ -160,20 +160,45 @@ def detect_via_template(image_path, templates_dir,
     return {"score": score, "best_match": best, "templates_searched": len(templates)}
 
 
+# Above this the model is confident enough on its own: the screenshot is going
+# to be flagged either way, so the expensive OCR pass adds nothing. Deliberately
+# one sided - a low model score does NOT allow skipping OCR, because the model
+# only learned inline ghost text and would miss an open chat panel.
+ML_CONFIDENT = 0.90
+
+
+def ml_is_confident(ml_score: Optional[float]) -> bool:
+    return ml_score is not None and ml_score >= ML_CONFIDENT
+
+
 class CopilotDetector:
     def __init__(self, ocr_cache=None, templates_dir=None, ml_scorer=None,
                  template_threshold=0.78,
-                 template_scales=(0.5, 0.75, 1.0, 1.25, 1.5, 2.0)):
+                 template_scales=(0.5, 0.75, 1.0, 1.25, 1.5, 2.0),
+                 skip_ocr_when_confident=True):
         self.ocr_cache = ocr_cache
         self.templates_dir = templates_dir
         self.ml_scorer = ml_scorer
         self.template_threshold = template_threshold
         self.template_scales = template_scales
+        self.skip_ocr_when_confident = skip_ocr_when_confident
 
-    def detect(self, image_path: Path) -> CopilotEvidence:
+    def detect(self, image_path: Path,
+               ml_score: Optional[float] = None) -> CopilotEvidence:
         ev = CopilotEvidence(path=str(image_path), score=0.0, method="none")
 
-        if self.ocr_cache is not None:
+        # Model first, so a confident result can short circuit the OCR pass.
+        if ml_score is None and self.ml_scorer is not None:
+            try:
+                ml_score = float(self.ml_scorer(image_path))
+            except Exception as e:
+                log.warning("ML scorer failed on %s: %s", image_path, e)
+        if ml_score is not None:
+            ev.ml_score = ml_score
+            ev.score, ev.method = ml_score, "ml"
+
+        skip_ocr = self.skip_ocr_when_confident and ml_is_confident(ml_score)
+        if self.ocr_cache is not None and not skip_ocr:
             text = self.ocr_cache.get_or_extract(image_path)
             strong, weak = find_keywords(text)
             ocr_score, ocr_method = score_from_keywords(strong, weak)
@@ -183,7 +208,6 @@ class CopilotDetector:
             ev.detected_tool = infer_tool(strong, weak)
             if ocr_score > ev.score:
                 ev.score, ev.method = ocr_score, ocr_method
-                
 
         if self.templates_dir is not None:
             tpl = detect_via_template(image_path, self.templates_dir,
@@ -195,15 +219,6 @@ class CopilotDetector:
                 ev.template_box = tpl["best_match"]["box"]
             if tpl["score"] > ev.score:
                 ev.score, ev.method = tpl["score"], "template"
-
-        if self.ml_scorer is not None:
-            try:
-                ml_s = float(self.ml_scorer(image_path))
-                ev.ml_score = ml_s
-                if ml_s > ev.score:
-                    ev.score, ev.method = ml_s, "ml"
-            except Exception as e:
-                log.warning("ML scorer failed on %s: %s", image_path, e)
 
         return ev
 
@@ -238,7 +253,63 @@ def write_csv(results: list[CopilotEvidence], out_path: Path) -> None:
         
 
 
-def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[Callable[[Path], float]]:
+class MLScorer:
+    """Wraps the trained CNN. Callable per image for compatibility, but
+    score_batch is what the GUI uses - one forward pass per BATCH images
+    instead of per screenshot."""
+
+    BATCH = 16
+
+    def __init__(self, model, eval_tfms, device, torch_mod,
+                 text_encoder=None, ocr_cache=None):
+        self._model = model
+        self._tfms = eval_tfms
+        self._device = device
+        self._torch = torch_mod
+        self._text_encoder = text_encoder
+        self._ocr_cache = ocr_cache
+
+    def __call__(self, path: Path) -> float:
+        return self.score_batch([path])[str(path)]
+
+    def score_batch(self, paths, progress=None) -> dict[str, float]:
+        from PIL import Image
+        torch = self._torch
+        out: dict[str, float] = {}
+        done = 0
+        with torch.no_grad():
+            for i in range(0, len(paths), self.BATCH):
+                chunk = [Path(p) for p in paths[i:i + self.BATCH]]
+                xs, kept = [], []
+                for p in chunk:
+                    try:
+                        xs.append(self._tfms(Image.open(p).convert("RGB")))
+                        kept.append(p)
+                    except Exception as e:
+                        log.warning("Could not read %s: %s", p, e)
+                        out[str(p)] = 0.0
+                if not xs:
+                    done += len(chunk)
+                    if progress:
+                        progress(done, len(paths))
+                    continue
+                x = torch.stack(xs).to(self._device)
+                if self._text_encoder is not None:
+                    texts = [self._ocr_cache.get_or_extract(p) for p in kept]
+                    t = self._text_encoder.encode(texts).to(self._device)
+                else:
+                    t = torch.zeros(len(kept), 0, device=self._device)
+                logits = self._model(x, t)
+                probs = torch.sigmoid(logits).cpu()
+                for p, prob in zip(kept, probs):
+                    out[str(p)] = float(prob)
+                done += len(chunk)
+                if progress:
+                    progress(done, len(paths))
+        return out
+
+
+def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[MLScorer]:
     cfg = load_config(cfg_path)
     if not cfg.paths.checkpoint.exists():
         log.info("No checkpoint at %s; ML signal disabled.", cfg.paths.checkpoint)
@@ -249,14 +320,17 @@ def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[Callable[[Path], float
         import torch
         from .data import build_transforms
         from .model import TextEncoder, build_model
-        from PIL import Image
     except ImportError as e:
         log.warning("ML deps not available (%s); ML signal disabled.", e)
         return None
 
     sidecar = cfg.paths.checkpoint.with_suffix(".meta.json")
     meta = json.loads(sidecar.read_text()) if sidecar.exists() else {}
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
     model = build_model(cfg.model, text_emb_dim=meta.get("text_emb_dim", 0),
                         pretrained=False).to(device)
     model.load_state_dict(torch.load(cfg.paths.checkpoint, map_location=device))
@@ -267,19 +341,8 @@ def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[Callable[[Path], float
         if cfg.model.use_ocr else None
     ocr_cache = OCRCache(cfg.paths.ocr_cache) if cfg.model.use_ocr else None
 
-    @torch.no_grad()
-    def _score(path: Path) -> float:
-        img = Image.open(path).convert("RGB")
-        x = eval_tfms(img).unsqueeze(0).to(device)
-        if text_encoder is not None:
-            txt = ocr_cache.get_or_extract(path)
-            t = text_encoder.encode([txt]).to(device)
-        else:
-            t = torch.zeros(1, 0, device=device)
-        logit = model(x, t).item()
-        return float(torch.sigmoid(torch.tensor(logit)).item())
-
-    return _score
+    return MLScorer(model, eval_tfms, device, torch,
+                    text_encoder=text_encoder, ocr_cache=ocr_cache)
 
 
 def main():

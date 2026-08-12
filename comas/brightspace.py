@@ -72,13 +72,46 @@ def score_markers(on: list[str], off: list[str]) -> tuple[float, str]:
     return 0.05, "on_quiz"
 
 
-class BrightspaceDetector:
-    def __init__(self, ocr_cache: OCRCache):
-        self.ocr_cache = ocr_cache
+# Tab titles and the URL bar sit in the top strip, so most screenshots can be
+# judged from a crop. If the strip shows nothing either way we re-read the full
+# frame, which keeps the verdicts identical to a full-frame-only scan.
+TOP_STRIP = (0.0, 0.25)
 
-    def detect(self, image_path: Path) -> BrightspaceEvidence:
+
+class BrightspaceDetector:
+    def __init__(self, ocr_cache: OCRCache, use_roi: bool = True):
+        self.ocr_cache = ocr_cache
+        self.use_roi = use_roi
+
+    def _read(self, image_path: Path) -> tuple[str, list[str], list[str]]:
+        if self.use_roi:
+            text = self.ocr_cache.get_or_extract(image_path, region=TOP_STRIP)
+            on, off = find_markers(text)
+            if on or off:
+                return text, on, off
         text = self.ocr_cache.get_or_extract(image_path)
         on, off = find_markers(text)
+        return text, on, off
+
+    def prefetch(self, paths, workers=None, progress=None) -> None:
+        """Warm the cache in parallel: crops first, then full frames for the undecided."""
+        paths = [Path(p) for p in paths]
+        if self.use_roi:
+            self.ocr_cache.extract_many(paths, region=TOP_STRIP,
+                                        workers=workers, progress=progress)
+            undecided = []
+            for p in paths:
+                text = self.ocr_cache.peek(p, region=TOP_STRIP) or ""
+                on, off = find_markers(text)
+                if not on and not off:
+                    undecided.append(p)
+            if undecided:
+                self.ocr_cache.extract_many(undecided, workers=workers)
+        else:
+            self.ocr_cache.extract_many(paths, workers=workers, progress=progress)
+
+    def detect(self, image_path: Path) -> BrightspaceEvidence:
+        text, on, off = self._read(image_path)
         score, verdict = score_markers(on, off)
         sites = sorted({OFF_TASK_KEYWORDS[k] for k in off})
         return BrightspaceEvidence(

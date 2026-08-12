@@ -29,11 +29,44 @@ def test_cache_persists_to_disk(tmp_path: Path):
     img = tmp_path / "img.png"
     _make_png(img)
     cache = OCRCache(cache_path)
-    with patch.object(cache, "_run_ocr", return_value="hello world"):
+    with patch("comas.ocr._ocr_image", return_value="hello world"):
         assert cache.get_or_extract(img) == "hello world"
         assert cache.get_or_extract(img) == "hello world"
     cache.flush()
     cache2 = OCRCache(cache_path)
-    with patch.object(cache2, "_run_ocr",
-                      side_effect=AssertionError("should not run")):
+    with patch("comas.ocr._ocr_image",
+               side_effect=AssertionError("should not run")):
         assert cache2.get_or_extract(img) == "hello world"
+
+
+def test_region_cached_separately_from_full_frame(tmp_path: Path):
+    cache = OCRCache(tmp_path / "ocr.json")
+    img = tmp_path / "img.png"
+    _make_png(img)
+    with patch("comas.ocr._ocr_image", return_value="top strip"):
+        assert cache.get_or_extract(img, region=(0.0, 0.25)) == "top strip"
+    # the crop must not satisfy a later full-frame lookup
+    with patch("comas.ocr._ocr_image", return_value="whole page"):
+        assert cache.get_or_extract(img) == "whole page"
+    assert len(cache) == 2
+
+
+def test_extract_many_skips_cached_and_fills_rest(tmp_path: Path):
+    cache = OCRCache(tmp_path / "ocr.json")
+    imgs = []
+    for i in range(3):
+        p = tmp_path / f"i{i}.png"
+        _make_png(p, (i * 20, 0, 0))
+        imgs.append(p)
+    with patch("comas.ocr._ocr_image", return_value="text"):
+        cache.get_or_extract(imgs[0])
+    seen = []
+
+    def fake(args):
+        seen.append(args[0])
+        return args[0], "text"
+
+    with patch("comas.ocr._ocr_job", side_effect=fake):
+        cache.extract_many(imgs, workers=1)
+    assert len(seen) == 2          # the cached one was not re-OCR'd
+    assert len(cache) == 3

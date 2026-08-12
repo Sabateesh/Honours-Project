@@ -26,3 +26,29 @@ installer instead, then create your venv from that interpreter.
 python3 -m comas.gui          # desktop app
 python3 -m pytest tests/      # test suite
 ```
+
+## Detection signals
+
+VS Code screenshots are scored by a CNN first; OCR keyword matching only runs on
+images the model is not already confident about. The two catch different things:
+
+| | ghost text | chat panel | unseen assistant |
+|---|---|---|---|
+| CNN | yes | yes | maybe |
+| OCR keywords | no | yes | yes, if named |
+
+OCR is kept as the fallback because it degrades differently: keyword matching
+breaks when a vendor renames a button, the CNN breaks on unfamiliar themes or a
+redesigned UI. It is also the baseline the CNN is measured against.
+
+## Regenerating training data
+
+```
+python3 -m comas.synthetic --out data_vscode --n-active 200 --n-clean 200
+python3 -m comas.synthetic_brightspace --out data_brightspace
+```
+
+Half the VS Code negatives deliberately show a non-chat side panel (Outline,
+Extensions, Source Control, Search). Without them the model learns "panel on the
+right = cheating" and flags anyone with the Extensions view open. Tune with
+`--hard-neg-frac`.

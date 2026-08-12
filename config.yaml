@@ -1,5 +1,5 @@
 data:
-  root: data/
+  root: data_vscode/
   img_size: 512
   num_workers: 4
   batch_size: 16
@@ -22,7 +22,7 @@ train:
   pos_weight_override: null
 
 paths:
-  checkpoint: checkpoints/best.pt
+  checkpoint: checkpoints/vscode_best.pt
   ocr_cache: cache/ocr.json
 
 logging:
