@@ -32,3 +32,21 @@ def test_detail_text_falls_back_to_verdict_when_no_sites():
 def test_detail_text_ignores_missing_detectors():
     r = _result(0.9, cop=None, bs=0.9, verdict="left_quiz", sites="google")
     assert "AI coding" not in App._detail_text(r, 0.5)
+
+
+def test_ide_screenshot_not_flagged_in_combined_mode():
+    # a VS Code capture is the student doing their exam, not a tab-leave
+    assert App._brightspace_contribution("left_quiz", 0.95, combined=True,
+                                         is_ide=True) == 0.0
+
+
+def test_ide_gets_no_free_pass_in_brightspace_only_mode():
+    assert App._brightspace_contribution("left_quiz", 0.95, combined=False,
+                                         is_ide=True) == 0.95
+
+
+def test_non_ide_tab_leave_counts_in_combined_mode():
+    assert App._brightspace_contribution("left_quiz", 0.95, combined=True,
+                                         is_ide=False) == 0.95
+    assert App._brightspace_contribution("on_quiz", 0.05, combined=True,
+                                         is_ide=False) == 0.05

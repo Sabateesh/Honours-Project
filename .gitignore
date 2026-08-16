@@ -6,6 +6,9 @@ __pycache__/
 
 # generated training data & artifacts (rebuild with comas.synthetic / comas.realpairs)
 data/
+data_vscode/
+data_vscode_holdout/
+data_brightspace/
 data_holdout/
 all_shots/
 checkpoints/

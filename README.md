@@ -46,6 +46,15 @@ redesigned UI. It is also the baseline the CNN is measured against.
 ```
 python3 -m comas.synthetic --out data_vscode --n-active 200 --n-clean 200
 python3 -m comas.synthetic_brightspace --out data_brightspace
+# non-IDE negatives: a real CoMas stream is mostly browsers, not editors
+cp data_brightspace/on_quiz/*.png data_brightspace/left_quiz/*.png data_vscode/no_copilot/
+```
+
+After training, break the headline number down by failure mode:
+
+```
+python3 -m comas.variant_report          # recall for ghost/panel/both,
+                                         # FPR for clean/hardneg/browser negatives
 ```
 
 Half the VS Code negatives deliberately show a non-chat side panel (Outline,

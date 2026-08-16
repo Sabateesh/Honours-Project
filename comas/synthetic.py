@@ -520,7 +520,9 @@ def generate(out_dir: Path, n_active: int, n_clean: int, sessions: int,
         folder = out_dir / label
         folder.mkdir(parents=True, exist_ok=True)
         img = make_sample(corpus, rng, variant)
-        img.save(folder / f"{session}_{counters[label]:04d}.png")
+        # variant in the filename so recall can be reported per failure mode;
+        # the session token stays first, which is all the splitter looks at
+        img.save(folder / f"{session}_{variant}_{counters[label]:04d}.png")
         if (i + 1) % 50 == 0:
             log.info("%d / %d", i + 1, len(jobs))
 

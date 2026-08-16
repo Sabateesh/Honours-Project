@@ -50,6 +50,7 @@ class BrightspaceEvidence:
     on_quiz_matches: list[str] = field(default_factory=list)
     off_task_matches: list[str] = field(default_factory=list)
     off_task_sites: list[str] = field(default_factory=list)
+    is_ide: bool = False
     ocr_snippet: Optional[str] = None
 
 
@@ -63,18 +64,33 @@ def find_markers(text: str) -> tuple[list[str], list[str]]:
 
 
 def score_markers(on: list[str], off: list[str]) -> tuple[float, str]:
-    if off and not on:
-        return 0.95, "left_quiz"
-    if off and on:
-        return 0.60, "split_view"
-    if not on:
-        return 0.50, "no_quiz_visible"
-    return 0.05, "on_quiz"
+    # The quiz markers are the whole verdict: during a Brightspace exam the
+    # quiz should be on screen, so any capture without it is a tab-leave.
+    # Off-task keywords no longer drive the score - they only name the site
+    # in the evidence line ("left_quiz (stackoverflow)") when recognized.
+    if on:
+        return 0.05, "on_quiz"
+    return 0.95, "left_quiz"
 
 
-# Tab titles and the URL bar sit in the top strip, so most screenshots can be
-# judged from a crop. If the strip shows nothing either way we re-read the full
-# frame, which keeps the verdicts identical to a full-frame-only scan.
+# VS Code chrome that OCR reads reliably. Used in combined mode: a capture
+# that is clearly the IDE is the student doing their exam, not a tab-leave.
+IDE_KEYWORDS = [
+    "explorer", "debug console", "problems", "output", "terminal",
+    "spaces: 4", "utf-8", ".py", "outline", "timeline",
+]
+
+
+def looks_like_ide(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    return sum(1 for k in IDE_KEYWORDS if k in low) >= 2
+
+
+# Tab titles and the URL bar sit in the top strip, so an on-quiz capture can
+# usually be settled from a crop. Anything else must be confirmed against the
+# full frame before it is called a tab-leave.
 TOP_STRIP = (0.0, 0.25)
 
 
@@ -87,14 +103,15 @@ class BrightspaceDetector:
         if self.use_roi:
             text = self.ocr_cache.get_or_extract(image_path, region=TOP_STRIP)
             on, off = find_markers(text)
-            if on or off:
+            if on:
                 return text, on, off
         text = self.ocr_cache.get_or_extract(image_path)
         on, off = find_markers(text)
         return text, on, off
 
     def prefetch(self, paths, workers=None, progress=None) -> None:
-        """Warm the cache in parallel: crops first, then full frames for the undecided."""
+        """Warm the cache in parallel: crops first, then full frames for
+        anything the crop couldn't clear as on-quiz."""
         paths = [Path(p) for p in paths]
         if self.use_roi:
             self.ocr_cache.extract_many(paths, region=TOP_STRIP,
@@ -102,8 +119,8 @@ class BrightspaceDetector:
             undecided = []
             for p in paths:
                 text = self.ocr_cache.peek(p, region=TOP_STRIP) or ""
-                on, off = find_markers(text)
-                if not on and not off:
+                on, _ = find_markers(text)
+                if not on:
                     undecided.append(p)
             if undecided:
                 self.ocr_cache.extract_many(undecided, workers=workers)
@@ -121,6 +138,7 @@ class BrightspaceDetector:
             on_quiz_matches=on,
             off_task_matches=off,
             off_task_sites=sites,
+            is_ide=looks_like_ide(text),
             ocr_snippet=text[:300] if text else None,
         )
 

@@ -7,12 +7,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
+from PIL import Image
+
 try:
     import torch
     from torch.utils.data import DataLoader, Dataset
     from torchvision import transforms
     from tqdm import tqdm
-    from PIL import Image
     _ML_AVAILABLE = True
 except ImportError:
     _ML_AVAILABLE = False
@@ -23,7 +24,6 @@ except ImportError:
     torch = None
     DataLoader = None
     transforms = None
-    Image = None
 
     def tqdm(x, **kw):
         return x
@@ -31,11 +31,63 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
+# The synthetic renders are pixel-perfect; real CoMas captures are Retina
+# screenshots that have been scaled, compressed, and slightly blurred along the
+# way. These degradations are applied only at train time so the model cannot
+# key on synthetic crispness. Plain classes (not lambdas) because macOS
+# DataLoader workers spawn and must pickle their transforms.
+
+class RandomDownscale:
+    def __init__(self, p=0.5, scale=(0.5, 0.9)):
+        self.p = p
+        self.scale = scale
+
+    def __call__(self, img):
+        if random.random() >= self.p:
+            return img
+        s = random.uniform(*self.scale)
+        w, h = img.size
+        small = img.resize((max(1, int(w * s)), max(1, int(h * s))),
+                           Image.BILINEAR)
+        return small.resize((w, h), Image.BILINEAR)
+
+
+class RandomJPEG:
+    def __init__(self, p=0.4, quality=(40, 90)):
+        self.p = p
+        self.quality = quality
+
+    def __call__(self, img):
+        if random.random() >= self.p:
+            return img
+        import io
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG",
+                 quality=random.randint(*self.quality))
+        buf.seek(0)
+        return Image.open(buf).convert("RGB")
+
+
+class RandomBlur:
+    def __init__(self, p=0.3, radius=(0.4, 1.2)):
+        self.p = p
+        self.radius = radius
+
+    def __call__(self, img):
+        if random.random() >= self.p:
+            return img
+        from PIL import ImageFilter
+        return img.filter(ImageFilter.GaussianBlur(random.uniform(*self.radius)))
+
+
 def build_transforms(img_size: int) -> tuple[Any, Any]:
     if not _ML_AVAILABLE:
         raise RuntimeError("torch/torchvision required")
     train_tfms = transforms.Compose([
         transforms.Resize((img_size, img_size)),
+        RandomDownscale(),
+        RandomJPEG(),
+        RandomBlur(),
         transforms.ColorJitter(brightness=0.1, contrast=0.1),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
