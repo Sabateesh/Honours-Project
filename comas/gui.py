@@ -501,14 +501,36 @@ class App(tk.Tk):
         thr = tk.Frame(toolbar, bg=BG)
         thr.pack(side="right")
         tk.Label(thr, text="FLAG THRESHOLD", bg=BG, fg=FAINT,
-                 font=(FONT, 9, "bold")).pack(side="left", padx=(0, 10))
+                 font=(FONT, 9, "bold")).pack(side="left", padx=(0, 8))
+
+        # The tiled model's scores bunch up just below 1.0, so the useful
+        # decisions all live between 0.98 and 1.00. A coarse 0.05-step slider
+        # capped at 0.95 could not even express the calibrated default and
+        # silently clamped it. Fine steps plus a typed box cover both the
+        # broad range and the precision the top end needs.
         self.thr_slider = tk.Scale(
-            thr, from_=0.05, to=0.95, resolution=0.05,
-            orient="horizontal", length=200, bg=BG, fg=INK,
+            thr, from_=0.50, to=1.0, resolution=0.0001,
+            orient="horizontal", length=300, bg=BG, fg=INK,
             troughcolor="#e2e8f0", highlightthickness=0, bd=0,
-            font=TINY, command=self._on_threshold)
+            font=TINY, showvalue=False, command=self._on_threshold)
         self.thr_slider.set(FLAG_THRESHOLD)
         self.thr_slider.pack(side="left")
+
+        self.thr_entry = tk.Entry(thr, width=7, font=(FONT, 11), justify="center",
+                                  bd=0, highlightthickness=1,
+                                  highlightbackground=BORDER,
+                                  highlightcolor=RED, bg=CARD, fg=INK)
+        self.thr_entry.insert(0, f"{FLAG_THRESHOLD:.4f}")
+        self.thr_entry.pack(side="left", padx=(10, 0), ipady=4)
+        self.thr_entry.bind("<Return>", self._on_threshold_typed)
+        self.thr_entry.bind("<FocusOut>", self._on_threshold_typed)
+
+        # jumping straight to the operating points that were actually measured
+        for label, value in (("strict", 0.9967), ("default", 0.9925),
+                             ("loose", 0.9882)):
+            Button(thr, label, command=lambda v=value: self._set_threshold(v),
+                   bg=CARD, fg=DIM, hover="#f1f5f9", border=BORDER,
+                   font=(FONT, 10), padx=10, pady=5).pack(side="left", padx=3)
 
         # image stage
         stage_wrap = tk.Frame(self.body, bg=STAGE)
@@ -587,7 +609,26 @@ class App(tk.Tk):
 
     def _on_threshold(self, value):
         self.threshold = float(value)
+        if hasattr(self, "thr_entry"):
+            self.thr_entry.delete(0, tk.END)
+            self.thr_entry.insert(0, f"{self.threshold:.4f}")
         self._refilter()
+
+    def _on_threshold_typed(self, _event=None):
+        """Typed values are the only way to reach thresholds the slider's step
+        size cannot land on exactly."""
+        try:
+            v = float(self.thr_entry.get())
+        except ValueError:
+            self.thr_entry.delete(0, tk.END)
+            self.thr_entry.insert(0, f"{self.threshold:.4f}")
+            return
+        self._set_threshold(max(0.0, min(1.0, v)))
+
+    def _set_threshold(self, value):
+        # setting the slider fires _on_threshold, which syncs the entry box
+        # and refilters; doing it here as well would filter twice
+        self.thr_slider.set(value)
 
     def _refilter(self):
         flagged = self._flagged()
