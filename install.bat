@@ -12,6 +12,32 @@ set MODEL_TAG=v1.0.0
 echo CoMas Screenshot Triage - installer
 echo.
 
+REM ------------------------------------------------------- path sanity ---
+REM PyTorch ships headers nested nine levels deep. Windows caps paths at 260
+REM characters, so a long folder makes pip fail with a confusing "No such
+REM file or directory" after a 2 GB download. Running the .bat straight out
+REM of a ZIP is the usual cause: Explorer unpacks to a Temp folder with a
+REM GUID in the name and there is no room left.
+set "HERE=%CD%"
+set "PATHWARN="
+echo !HERE! | findstr /i "\\Temp\\" >nul && set PATHWARN=1
+if not "!HERE:~70!"=="" set PATHWARN=1
+
+if defined PATHWARN (
+    echo This folder is too long, or is a temporary folder:
+    echo   !HERE!
+    echo.
+    echo Installing PyTorch here will fail on Windows' 260-character path
+    echo limit. If you double-clicked install.bat inside the ZIP, Windows
+    echo unpacked it somewhere temporary - that is the usual cause.
+    echo.
+    echo Fix: right-click the ZIP, Extract All, set the destination to
+    echo      C:\CoMas   then run install.bat from there.
+    echo.
+    pause
+    exit /b 1
+)
+
 REM ------------------------------------------------------------- Python ---
 set PY=
 for %%C in (python3.12 python3.11 python) do (

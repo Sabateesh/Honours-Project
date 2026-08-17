@@ -23,7 +23,14 @@ or `git clone`), then:
 | | |
 |---|---|
 | **macOS / Linux** | open a terminal in the folder and run `./install.sh` |
-| **Windows** | double-click `install.bat` |
+| **Windows** | extract the ZIP to a short path such as `C:\CoMas`, then double-click `install.bat` |
+
+> **Windows:** extract the ZIP before running the installer, and keep the
+> folder path short. Double-clicking `install.bat` from inside the ZIP makes
+> Windows unpack it to a long temporary folder, and PyTorch's deeply nested
+> headers then breach the 260-character path limit — pip fails with a
+> misleading "No such file or directory". `install.bat` checks for this and
+> stops early.
 
 The installer checks your Python and Tesseract, creates an isolated
 environment, installs the app, downloads the detection model, and leaves a
