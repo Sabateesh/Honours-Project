@@ -51,8 +51,7 @@ def main():
         print("!! No model loaded - the GUI would be running on OCR alone.")
 
     cache = OCRCache(cfg.paths.ocr_cache)
-    det = CopilotDetector(ocr_cache=cache, ml_scorer=scorer,
-                          skip_ocr_when_confident=False)
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=scorer)
 
     paths = sorted(p for p in args.folder.iterdir()
                    if p.suffix.lower() in IMAGE_EXTS)

@@ -12,8 +12,7 @@ from PIL import Image, ImageDraw, ImageTk
 
 from .brightspace import BrightspaceDetector
 from .config import load_config
-from .copilot import (CopilotDetector, build_ml_scorer, ml_is_confident,
-                      score_from_keywords)
+from .copilot import CopilotDetector, build_ml_scorer, score_from_keywords
 from .ocr import DEFAULT_WORKERS as OCR_WORKERS
 from .ocr import OCRCache
 
@@ -312,8 +311,7 @@ class App(tk.Tk):
             # OCR always runs: keywords are the only way to tell a chat
             # panel from inline ghost text, which the reviewer is shown
             copilot = CopilotDetector(ocr_cache=self.ocr_cache,
-                                      ml_scorer=ml_scorer,
-                                      skip_ocr_when_confident=False)
+                                      ml_scorer=ml_scorer)
         brightspace = BrightspaceDetector(self.ocr_cache) if use_brightspace else None
 
         def _ocr_progress(done, total):

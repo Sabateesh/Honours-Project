@@ -5,7 +5,6 @@ from comas.copilot import (
     CopilotEvidence,
     find_keywords,
     infer_tool,
-    ml_is_confident,
     score_from_keywords,
     write_csv,
 )
@@ -23,29 +22,16 @@ class _CountingCache:
         return self.text
 
 
-def test_confident_model_skips_ocr():
-    cache = _CountingCache("GitHub Copilot")
-    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.95)
-    ev = det.detect(Path("x.png"))
-    assert cache.calls == 0
-    assert ev.score == 0.95 and ev.method == "ml"
-
-
-def test_unconfident_model_still_runs_ocr():
-    cache = _CountingCache("GitHub Copilot")
-    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.85)
-    ev = det.detect(Path("x.png"))
-    assert cache.calls == 1
-    assert ev.score == 0.95 and ev.method == "ocr_strong"
-
-
-def test_low_model_score_never_suppresses_ocr():
-    # the model only learned ghost text, so it must not veto an open chat panel
-    cache = _CountingCache("GitHub Copilot")
-    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.02)
-    ev = det.detect(Path("x.png"))
-    assert cache.calls == 1
-    assert ev.score == 0.95
+def test_ocr_runs_however_confident_the_model_is():
+    """OCR must never be skipped. The keywords are the only chat-panel
+    detector and the only way to tell a panel from inline ghost text, and on
+    real screenshots the model is confident on nearly everything."""
+    for score in (0.02, 0.85, 0.95, 0.999):
+        cache = _CountingCache("GitHub Copilot")
+        det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p, s=score: s)
+        ev = det.detect(Path("x.png"))
+        assert cache.calls == 1, f"OCR skipped at model score {score}"
+        assert ev.score == 0.95 and ev.method == "ocr_strong"
 
 
 class _FakeTensor:
@@ -130,8 +116,7 @@ def test_model_score_discarded_when_not_an_editor():
     is meaningless. Without this gate a stray high score would be reported to
     a proctor as 'AI coding assistant detected' on a browser window."""
     cache = _CountingCache("Gmail - Inbox (24)")   # no IDE chrome
-    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97,
-                          skip_ocr_when_confident=False)
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97)
     ev = det.detect(Path("x.png"))
     assert ev.is_ide is False
     assert ev.ml_gated is True
@@ -142,8 +127,7 @@ def test_model_score_discarded_when_not_an_editor():
 def test_keywords_survive_the_gate():
     # reading the assistant's own name is evidence wherever it appears
     cache = _CountingCache("github.com/copilot - Gmail")
-    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97,
-                          skip_ocr_when_confident=False)
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97)
     ev = det.detect(Path("x.png"))
     assert ev.is_ide is False
     assert ev.score > 0.0
@@ -151,20 +135,13 @@ def test_keywords_survive_the_gate():
 
 def test_model_score_kept_inside_an_editor():
     cache = _CountingCache("EXPLORER  data.py  TERMINAL  UTF-8  Spaces: 4")
-    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97,
-                          skip_ocr_when_confident=False)
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97)
     ev = det.detect(Path("x.png"))
     assert ev.is_ide is True
     assert ev.ml_gated is False
     assert ev.score == 0.97
 
 
-def test_ml_is_confident_bounds():
-    assert ml_is_confident(0.90)
-    assert ml_is_confident(0.99)
-    assert not ml_is_confident(0.89)
-    assert not ml_is_confident(0.0)
-    assert not ml_is_confident(None)
 
 def test_find_keywords_copilot_strong():
     text = "Status: GitHub Copilot is running. Tab to accept."

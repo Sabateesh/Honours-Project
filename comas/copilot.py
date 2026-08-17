@@ -178,34 +178,22 @@ def detect_via_template(image_path, templates_dir,
     return {"score": score, "best_match": best, "templates_searched": len(templates)}
 
 
-# Above this the screenshot is flagged regardless, so OCR adds nothing.
-# One-sided on purpose: a LOW score must not skip OCR, or an open chat panel
-# the model never learned would be missed.
-ML_CONFIDENT = 0.90
-
-
-def ml_is_confident(ml_score: Optional[float]) -> bool:
-    return ml_score is not None and ml_score >= ML_CONFIDENT
-
-
 class CopilotDetector:
     def __init__(self, ocr_cache=None, templates_dir=None, ml_scorer=None,
                  template_threshold=0.78,
                  template_scales=(0.5, 0.75, 1.0, 1.25, 1.5, 2.0),
-                 skip_ocr_when_confident=True, gate_ml_on_ide=True):
+                 gate_ml_on_ide=True):
         self.ocr_cache = ocr_cache
         self.templates_dir = templates_dir
         self.ml_scorer = ml_scorer
         self.template_threshold = template_threshold
         self.template_scales = template_scales
-        self.skip_ocr_when_confident = skip_ocr_when_confident
         self.gate_ml_on_ide = gate_ml_on_ide
 
     def detect(self, image_path: Path,
                ml_score: Optional[float] = None) -> CopilotEvidence:
         ev = CopilotEvidence(path=str(image_path), score=0.0, method="none")
 
-        # Model first, so a confident result can short circuit the OCR pass.
         if ml_score is None and self.ml_scorer is not None:
             try:
                 ml_score = float(self.ml_scorer(image_path))
@@ -215,8 +203,9 @@ class CopilotDetector:
             ev.ml_score = ml_score
             ev.score, ev.method = ml_score, "ml"
 
-        skip_ocr = self.skip_ocr_when_confident and ml_is_confident(ml_score)
-        if self.ocr_cache is not None and not skip_ocr:
+        # OCR always runs: the keywords are the only chat-panel detector, and
+        # the only way to tell a panel from inline ghost text.
+        if self.ocr_cache is not None:
             ev.ocr_ran = True
             text = self.ocr_cache.get_or_extract(image_path)
             ev.is_ide = looks_like_ide(text)
