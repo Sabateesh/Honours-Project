@@ -34,3 +34,5 @@ data_neg.csv
 # launchers written by the installer
 Run CoMas Triage.command
 Run CoMas Triage.bat
+build/
+*.egg-info/
