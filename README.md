@@ -4,8 +4,8 @@
 
 ## What this is
 
-CoMas is the proctoring tool Carleton uses for online exams. It takes mutiple
-screenshot of each student's desktop druing an exam. One exam with a few hundred students
+CoMas is the proctoring tool Carleton uses for online exams. It takes multiple
+screenshots of each student's desktop during an exam. One exam with a few hundred students
 produces tens of thousands of screenshots, so nobody can look at them all
 properly and review ends up shallow and inconsistent.
 
@@ -105,7 +105,11 @@ to touch environment variables.
 **4. Extract it to `C:\CoMas`.** Right-click the ZIP → **Extract All** → change
 the destination to `C:\CoMas` → Extract.
 
--Download 
+> Don't skip this and double-click `install.bat` inside the ZIP. Windows
+> unpacks it to a long temporary folder, and PyTorch's deeply nested files then
+> breach Windows' 260-character path limit — the install fails after
+> downloading 2 GB with a misleading "No such file or directory".
+> `install.bat` detects this and stops early.
 
 **5. Run the installer.** Open `C:\CoMas` and double-click **`install.bat`**.
 
