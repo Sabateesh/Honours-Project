@@ -1,11 +1,45 @@
+# Shipped configuration: the tile-trained model applied to native-resolution
+# tiles. Chosen on REAL screenshots, not synthetic ones.
+#
+# Real-data comparison (14 real ghost-text captures, 13 real clean captures),
+# recall at <=8% false positives:
+#     OCR keyword baseline .................... 0.21
+#     vscode_768_v3, whole image .............. 0.57   (best synthetic score)
+#     vscode_tiles_2x, whole image ............ 0.14
+#     vscode_tiles_2x, TILED .................. 0.79   <- this
+#
+# The model with the best synthetic AUROC (0.999) is not the best on real
+# screenshots. Tiling was originally rejected on synthetic evidence and turned
+# out to be the strongest approach once measured against real captures.
 data:
-  root: data_vscode/
-  img_size: 768
+  root: data_tiles/
+  img_size: 512
   num_workers: 4
-  batch_size: 8
+  batch_size: 12
   val_frac: 0.15
   test_frac: 0.15
   seed: 42
+
+# Mild by design: ghost text is a pixel or two of dim italic colour, and
+# aggressive downscaling or blur destroys the only signal that identifies it.
+augment:
+  downscale_p: 0.5
+  downscale_min: 0.75
+  downscale_max: 0.95
+  jpeg_p: 0.25
+  jpeg_qmin: 65
+  jpeg_qmax: 95
+  blur_p: 0.15
+  blur_min: 0.3
+  blur_max: 0.6
+
+# Cut the screenshot into overlapping native-resolution tiles, score each, take
+# the maximum. Also reports which tile fired, which the GUI draws as a box.
+tile:
+  enabled: true
+  tile_frac: 0.34
+  overlap: 0.35
+  min_px: 256
 
 model:
   use_ocr: false
@@ -15,15 +49,14 @@ model:
   dropout: 0.3
 
 train:
-  # both previous runs peaked at epoch 5 of 10 and overfit after
-  epochs: 7
+  epochs: 5
   lr: 1.0e-4
   weight_decay: 1.0e-4
   pos_weight_auto: true
   pos_weight_override: null
 
 paths:
-  checkpoint: checkpoints/vscode_768_v3.pt
+  checkpoint: checkpoints/vscode_tiles_2x.pt
   ocr_cache: cache/ocr.json
 
 logging:

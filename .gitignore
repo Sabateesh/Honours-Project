@@ -1,3 +1,8 @@
+# Trained models: ~90 MB each, well past what belongs in a git repo.
+# The shipped checkpoint is published on GitHub Releases instead; see README.
+checkpoints/
+*.pt
+
 # environments
 .venv*/
 __pycache__/
@@ -5,13 +10,11 @@ __pycache__/
 .pytest_cache/
 
 # generated training data & artifacts (rebuild with comas.synthetic / comas.realpairs)
+# all generated datasets, whatever they are called - these are rebuilt with
+# comas.synthetic / comas.tiling and must never end up in the repo
 data/
-data_vscode/
-data_vscode_holdout/
-data_brightspace/
-data_brightspace_2x/
-data_tiles/
-data_holdout/
+data_*/
+!data_README.md
 all_shots/
 checkpoints/
 cache/

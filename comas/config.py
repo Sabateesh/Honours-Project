@@ -35,7 +35,7 @@ class TileConfig:
 
 @dataclass
 class DataConfig:
-    root: Path = Path("data/")
+    root: Path = Path("data_vscode/")
     img_size: int = 384
     num_workers: int = 4
     batch_size: int = 16

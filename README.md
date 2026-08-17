@@ -1,80 +1,199 @@
 # CoMas Screenshot Triage
 
-Flags suspicious CoMas exam screenshots (AI coding assistants in VS Code, tab-leaves
-from Brightspace quizzes) so proctors review the most suspicious images first.
+Flags suspicious screenshots from CoMas online exams so a proctor reviews the
+most likely cases first instead of clicking through thousands of images.
 
-## Setup
+Two detection tasks:
 
-```
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+1. **AI coding assistant in VS Code** — an open chat panel, or an inline
+   "ghost text" suggestion at the cursor.
+2. **Brightspace tab-leave** — the student navigated away from their quiz.
 
-Tesseract must be installed separately (`brew install tesseract`).
+![Carleton University](comas/assets/carleton_logo.png)
 
-### macOS Tk warning
+---
 
-Don't use Xcode's bundled `python3` for the GUI. It ships an old Tk (8.5) with
-known rendering bugs on modern macOS — windows can render half-blank until
-resized. Use Homebrew Python (`brew install python-tk@3.11`) or the python.org
-installer instead, then create your venv from that interpreter.
+## Install
 
-## Running
+**Requirements:** Python 3.10+ and Tesseract. On macOS you must *not* use the
+Python bundled with Xcode — it ships an old Tk that renders the window
+incorrectly.
 
-```
-python3 -m comas.gui          # desktop app
-python3 -m pytest tests/      # test suite
-```
+### macOS
 
-## Detection signals
-
-VS Code screenshots are scored by a CNN first; OCR keyword matching only runs on
-images the model is not already confident about. The two catch different things:
-
-| | ghost text | chat panel | unseen assistant |
-|---|---|---|---|
-| CNN | yes | yes | maybe |
-| OCR keywords | no | yes | yes, if named |
-
-OCR is kept as the fallback because it degrades differently: keyword matching
-breaks when a vendor renames a button, the CNN breaks on unfamiliar themes or a
-redesigned UI. It is also the baseline the CNN is measured against.
-
-## Regenerating training data
-
-```
-python3 -m comas.synthetic --out data_vscode --n-active 200 --n-clean 200
-python3 -m comas.synthetic_brightspace --out data_brightspace
-# non-IDE negatives: a real CoMas stream is mostly browsers, not editors
-cp data_brightspace/on_quiz/*.png data_brightspace/left_quiz/*.png data_vscode/no_copilot/
+```bash
+brew install python@3.11 python-tk@3.11 tesseract
+git clone https://github.com/Sabateesh/Honours-Project.git
+cd Honours-Project
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e .
 ```
 
-### Tiled model (better ghost-text detection)
+### Windows
 
-Whole-image scoring resizes a screenshot down to the network input, which
-crushes ghost text to a few pixels. Tiling scores native-resolution crops
-instead and takes the maximum, and reports which tile fired so the GUI can
-highlight it.
+Install [Python 3.11+](https://www.python.org/downloads/) (tick "Add to PATH")
+and [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki), then:
 
-```
-python3 -m comas.tiling --src data_vscode --out data_tiles
-python3 -m comas.train --config config_tiles.yaml
-python3 -m comas.variant_report --data data_vscode_holdout \
-    --config config_tiles.yaml --split all --threshold 0.20
+```bat
+git clone https://github.com/Sabateesh/Honours-Project.git
+cd Honours-Project
+python -m venv .venv && .venv\Scripts\activate
+pip install -e .
 ```
 
-`config_tiles.yaml` sets `tile.enabled: true`, so the GUI picks up tiled
-inference automatically once that checkpoint exists.
+### Linux
 
-After training, break the headline number down by failure mode:
+```bash
+sudo apt install python3.11 python3-tk tesseract-ocr
+git clone https://github.com/Sabateesh/Honours-Project.git
+cd Honours-Project
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+### Download the detection model
+
+The trained model is ~90 MB, too large for the repository. Download
+`vscode_tiles_2x.pt` and `vscode_tiles_2x.meta.json` from the
+[Releases page](https://github.com/Sabateesh/Honours-Project/releases) and put
+both in `checkpoints/`:
 
 ```
-python3 -m comas.variant_report          # recall for ghost/panel/both,
-                                         # FPR for clean/hardneg/browser negatives
+Honours-Project/
+  checkpoints/
+    vscode_tiles_2x.pt
+    vscode_tiles_2x.meta.json
 ```
 
-Half the VS Code negatives deliberately show a non-chat side panel (Outline,
-Extensions, Source Control, Search). Without them the model learns "panel on the
-right = cheating" and flags anyone with the Extensions view open. Tune with
-`--hard-neg-frac`.
+The app runs without it but falls back to text-only detection, which misses
+most inline suggestions.
+
+### Verify
+
+```bash
+python -c "import tkinter; print(tkinter.TkVersion)"   # must be 8.6, not 8.5
+pytest -q                                              # 60 tests
+```
+
+---
+
+## Use
+
+```bash
+comas-triage          # or: python -m comas.gui
+```
+
+1. Pick a detection mode.
+2. Upload the screenshots CoMas captured.
+3. Review the ranked queue — most suspicious first, with the suspected region
+   boxed in red.
+4. Mark each **Reviewed** or **Dismissed**, then **Export report**.
+
+**Keyboard:** `←` `→` navigate, `r` reviewed, `d` dismiss, `c` clear, `e` export.
+
+The threshold slider adjusts sensitivity live. The export writes a timestamped
+folder with copies of the flagged images, a CSV of all scores, and a summary
+suitable for attaching to an academic integrity case.
+
+---
+
+## How it works
+
+Two independent detectors, because the two things being detected look nothing
+alike.
+
+**Chat panels** contain the assistant's own interface text, so OCR keyword
+matching finds them exactly and reports which tool it was. A keyword hit is
+evidence a human can verify at a glance, so it sorts to the top of the queue.
+
+**Inline ghost text** contains no identifying text at all — it is ordinary code
+rendered in dim italic. Only a vision model can see it. A ResNet50 is applied
+to overlapping native-resolution tiles of the screenshot, and the highest tile
+score wins; the winning tile is what the GUI boxes in red.
+
+The Brightspace detector uses no machine learning. It recognises the one
+legitimate state (the quiz is on screen) and treats anything else as a
+tab-leave, which catches sites nobody thought to blocklist.
+
+---
+
+## Measured performance
+
+On 27 **real** screenshots (14 with ghost text, 13 without):
+
+| detector | detected | false positives |
+|---|---|---|
+| OCR keywords only | 3/14 | 2/13 |
+| **shipped model + OCR** | **11/14** | **1/13** |
+
+The model reaches 0.999 AUROC on held-out *synthetic* data but 0.868 on real
+screenshots. Synthetic scores substantially overstate real performance — see
+`report/` for the full analysis, including a ranking comparison in which
+synthetic and real evaluation disagreed on which model was best.
+
+Small sample: 27 images. Treat these as counts, not precise percentages.
+
+---
+
+## Development
+
+```bash
+pip install -e ".[train,dev]"
+
+# regenerate training data (Retina scale, ghost text only)
+python -m comas.synthetic --out data_vscode --n-active 300 --n-clean 300 \
+    --scale 2 --ghost-only
+python -m comas.tiling --src data_vscode --out data_tiles
+
+# train
+python -m comas.train
+
+# evaluate on real screenshots - the number that matters
+python -m comas.diagnose --folder test_shots_positive --neg-folder test_shots
+
+# compare every checkpoint on real data
+python -m comas.compare_checkpoints
+```
+
+`config.yaml` is the shipped configuration. Thresholds belong to a specific
+checkpoint *and* inference mode — re-derive them with `compare_checkpoints`
+after any retrain rather than reusing an old value.
+
+### Layout
+
+```
+comas/
+  gui.py                    desktop reviewer interface
+  copilot.py                VS Code detector: keywords, CNN, signal fusion
+  brightspace.py            quiz-marker rule, IDE recognition
+  tiling.py                 tile geometry, tiled inference
+  ocr.py                    Tesseract wrapper, cache, parallel batching
+  model.py  data.py  train.py  evaluate.py  config.py
+  synthetic.py              VS Code screenshot generator
+  synthetic_brightspace.py  browser screenshot generator
+  diagnose.py               per-image explanation of a verdict
+  compare_checkpoints.py    rank checkpoints on real data
+  variant_report.py         per-variant synthetic breakdown
+tests/                      60 tests
+test_shots_positive/        14 real screenshots with ghost text
+test_shots/                 13 real screenshots without
+report/                     honours project report (LaTeX)
+```
+
+---
+
+## Limitations
+
+- Evaluated on 27 real screenshots — a small sample.
+- The model is trained on synthetic data and does not transfer perfectly;
+  roughly 3 in 14 real ghost-text screenshots are missed.
+- Keyword detection breaks when a vendor renames interface text, so the list
+  needs reviewing each term.
+- Only GitHub Copilot and Cursor are covered by name.
+- Each screenshot is judged alone; patterns across a student's session are not
+  modelled.
+
+## Licence
+
+MIT. Built as an honours project at Carleton University, School of Computer
+Science, supervised by Prof. Darryl Hill.

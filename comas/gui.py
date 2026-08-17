@@ -12,7 +12,8 @@ from PIL import Image, ImageDraw, ImageTk
 
 from .brightspace import BrightspaceDetector
 from .config import load_config
-from .copilot import CopilotDetector, build_ml_scorer, ml_is_confident
+from .copilot import (CopilotDetector, build_ml_scorer, ml_is_confident,
+                      score_from_keywords)
 from .ocr import DEFAULT_WORKERS as OCR_WORKERS
 from .ocr import OCRCache
 
@@ -40,12 +41,25 @@ SMALL = (FONT, 11)
 TINY = (FONT, 10)
 
 MODES = ["VSCODE Cheating", "Brightspace Cheating", "VSCODE + Brightspace Cheating"]
-# Recall-first, calibrated on the Retina-scale holdout: 0.50 catches 90% of
-# ghost text while flagging 32% of clean editors. Thresholds are specific to a
-# checkpoint - the previous model needed 0.20 for comparable recall, and using
-# that value here would flag every screenshot. Re-derive with
-# `python3 -m comas.variant_report` after retraining.
-FLAG_THRESHOLD = 0.50
+# Calibrated on REAL screenshots for the shipped tiled checkpoint
+# (vscode_tiles_2x.pt): 0.9925 gives 79% recall at 8% false positives on 14
+# real ghost-text and 13 real clean captures.
+#
+# Thresholds belong to a checkpoint AND to an inference mode. A value derived
+# from synthetic data is worthless here - on synthetic images scores spread
+# across 0-1, while on real captures they bunch up near 1.0, so a synthetic
+# threshold of 0.30 flags every screenshot. Re-derive with
+# `python3 -m comas.compare_checkpoints` after any retrain.
+#
+# Caveat: tuned on 27 images, so fitted to a small sample.
+FLAG_THRESHOLD = 0.9925
+
+# The keyword detector lives on its own scale: a strong match tops out at 0.95,
+# below the model threshold above, so sharing one cutoff would silently disable
+# OCR entirely - a screenshot with "GitHub Copilot" plainly readable would be
+# missed unless the model happened to agree. The two signals are thresholded
+# independently and either one can raise a flag.
+OCR_FLAG_THRESHOLD = 0.75
 VIEW_W, VIEW_H = 1160, 620
 
 
@@ -241,6 +255,25 @@ class App(tk.Tk):
                                bg=BG, fg=FAINT, font=SMALL)
         self.status.pack()
 
+        # The trained model is ~90 MB and is distributed separately from the
+        # source. Say so plainly rather than silently degrading to OCR only,
+        # which would miss most inline ghost text.
+        if not self.cfg.paths.checkpoint.exists():
+            warn = tk.Frame(wrap, bg="#fff4e5", highlightbackground="#f0c890",
+                            highlightthickness=1)
+            warn.pack(pady=(22, 0), ipadx=16, ipady=12)
+            tk.Label(warn, text="Detection model not installed",
+                     bg="#fff4e5", fg="#8a5a00",
+                     font=(FONT, 12, "bold")).pack()
+            tk.Label(warn,
+                     text=f"Expected at:  {self.cfg.paths.checkpoint}\n"
+                          "Download it from the project's GitHub Releases page "
+                          "and place it there.\n"
+                          "Without it only text-based detection runs, which "
+                          "misses most inline suggestions.",
+                     bg="#fff4e5", fg="#8a5a00", font=SMALL,
+                     justify="center").pack(pady=(4, 0))
+
     def _select_mode(self, mode):
         self.mode = mode
         for m, b in self.mode_buttons.items():
@@ -323,14 +356,24 @@ class App(tk.Tk):
         results = []
         for i, p in enumerate(paths):
             r = {"path": p, "score": 0.0, "copilot_score": None,
+                 "ml_score": None, "ocr_score": 0.0,
                  "assistant_kind": None, "left_vscode": 0.0,
                  "bs_score": None, "bs_verdict": None, "bs_sites": "",
                  "status": "", "box": None}
             if copilot:
                 ev = copilot.detect(p, ml_score=ml_scores.get(p))
                 r["copilot_score"] = ev.score
+                r["ml_score"] = ev.ml_score
+                r["ocr_score"] = score_from_keywords(ev.strong_matches,
+                                                     ev.weak_matches)[0]
                 r["assistant_kind"] = self._assistant_kind(ev)
                 r["score"] = max(r["score"], ev.score)
+                # A strong keyword match is the assistant's own interface text
+                # read straight off the screen - evidence a reviewer can verify
+                # in a glance, unlike a model score. It ranks above any model
+                # output so those screenshots come first in the queue.
+                if ev.strong_matches:
+                    r["score"] = 1.0
                 r["left_vscode"] = self._left_vscode(
                     ev.is_ide, ev.ocr_ran, combined=use_brightspace)
                 r["score"] = max(r["score"], r["left_vscode"])
@@ -388,11 +431,26 @@ class App(tk.Tk):
         return 0.95
 
     @staticmethod
+    def _assistant_flagged(r, threshold):
+        """Each detector is judged on its own scale. The model threshold is
+        calibrated near 1.0 for the tiled checkpoint; keyword scores top out
+        at 0.95, so comparing them to the same number would mean OCR could
+        never raise a flag."""
+        if (r.get("ml_score") or 0.0) >= threshold:
+            return True
+        if r.get("ocr_score", 0.0) >= OCR_FLAG_THRESHOLD:
+            return True
+        # no model available: fall back to the combined score
+        if r.get("ml_score") is None and (r.get("copilot_score") or 0.0) >= threshold:
+            return True
+        return False
+
+    @staticmethod
     def _detail_text(r, threshold):
         bits = []
         if r.get("left_vscode", 0.0) >= threshold:
             bits.append("LEFT VS CODE: screenshot is not the editor")
-        if r["copilot_score"] is not None and r["copilot_score"] >= threshold:
+        if r["copilot_score"] is not None and App._assistant_flagged(r, threshold):
             kind = r.get("assistant_kind")
             bits.append(f"CHEATING DETECTED: {kind}" if kind
                         else "CHEATING DETECTED: AI assistant")
@@ -523,7 +581,9 @@ class App(tk.Tk):
             self.unbind(key)
 
     def _flagged(self):
-        return [r for r in self.all_results if r["score"] >= self.threshold]
+        return [r for r in self.all_results
+                if r["score"] >= self.threshold
+                or self._assistant_flagged(r, self.threshold)]
 
     def _on_threshold(self, value):
         self.threshold = float(value)

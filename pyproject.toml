@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comas-triage"
+version = "1.0.0"
+description = "Flags suspicious CoMas exam screenshots so proctors review the most likely cases first"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Sabateesh Sivakumar" }]
+keywords = ["proctoring", "academic-integrity", "screenshot", "cnn", "ocr"]
+
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "pillow>=10.0",
+    "pytesseract>=0.3.10",
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# only needed to retrain or regenerate data, not to run the app
+train = [
+    "scikit-learn>=1.3",
+    "pandas>=2.0",
+    "tqdm>=4.65",
+]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+comas-triage = "comas.gui:main"
+
+[project.urls]
+Homepage = "https://github.com/Sabateesh/Honours-Project"
+
+[tool.setuptools]
+packages = ["comas"]
+
+[tool.setuptools.package-data]
+comas = ["assets/*.png"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

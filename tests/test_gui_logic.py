@@ -45,6 +45,45 @@ def test_detail_text_falls_back_when_kind_unknown():
     assert App._detail_text(r, 0.5) == "CHEATING DETECTED: AI assistant"
 
 
+def test_keyword_match_flags_even_below_model_threshold():
+    """The tiled model needs a threshold near 1.0, but keyword scores top out
+    at 0.95. Sharing one cutoff would silently disable OCR entirely."""
+    r = _result(0.95, cop=0.95)
+    r["ml_score"] = 0.10          # model saw nothing
+    r["ocr_score"] = 0.95         # "GitHub Copilot" plainly on screen
+    assert App._assistant_flagged(r, 0.9925)
+    assert "CHEATING DETECTED" in App._detail_text(r, 0.9925)
+
+
+def test_strong_keyword_outranks_a_model_detection():
+    """Readable interface text is verifiable evidence; a model score is not.
+    The keyword hit must sort first in the review queue."""
+    ocr_hit = _result(1.0, cop=0.95)      # promoted: strong keyword matched
+    model_hit = _result(0.999, cop=0.999)
+    assert ocr_hit["score"] > model_hit["score"]
+
+
+def test_weak_keywords_alone_do_not_flag():
+    r = _result(0.45, cop=0.45)
+    r["ml_score"] = 0.10
+    r["ocr_score"] = 0.45         # single weak keyword
+    assert not App._assistant_flagged(r, 0.9925)
+
+
+def test_model_alone_flags_when_over_threshold():
+    r = _result(0.999, cop=0.999)
+    r["ml_score"] = 0.999
+    r["ocr_score"] = 0.0
+    assert App._assistant_flagged(r, 0.9925)
+
+
+def test_neither_signal_does_not_flag():
+    r = _result(0.5, cop=0.5)
+    r["ml_score"] = 0.5
+    r["ocr_score"] = 0.0
+    assert not App._assistant_flagged(r, 0.9925)
+
+
 def test_non_ide_screenshot_flags_window_leave():
     assert App._left_vscode(is_ide=False, ocr_ran=True, combined=False) == 0.95
 

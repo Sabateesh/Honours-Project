@@ -81,6 +81,16 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ]
 
+# Real assistants render inline suggestions in ITALIC, not just a dimmer
+# colour. Matching that turned out to matter: a model trained on upright grey
+# text has never seen the slant that is arguably the most obvious cue a human
+# uses to spot a suggestion.
+ITALIC_FONT_CANDIDATES = [
+    "/System/Library/Fonts/Menlo.ttc",          # Menlo Italic lives at index 1
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Oblique.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Italic.ttf",
+]
+
 WINDOW_SIZES = [(1280, 800), (1440, 900), (1512, 982), (1680, 1050)]
 
 # Panel text is deliberately generic. None of it contains the OCR detector's
@@ -128,6 +138,10 @@ NEG_PANELS = ["outline", "extensions", "scm", "search"]
 # while an assistant is suggesting.
 INLAY_HINTS = [": str", ": int", ": bool", ": float", " -> None",
                ": list[str]", ": dict", " -> bool", ": Path", ": Optional[int]"]
+
+# Shortest suggestion worth generating. Below this the "ghost text" is a
+# couple of characters and the image is effectively a mislabelled negative.
+MIN_GHOST_CHARS = 8
 
 OUTLINE_ROWS = ["main", "load_corpus", "tokenize_line", "render", "Config",
                 "__init__", "run", "parse_args", "Detector", "detect", "flush"]
@@ -213,12 +227,21 @@ class _ScaledDraw:
         self._d.text(tuple(v * self.s for v in xy), txt, **self._kw(kw))
 
 
-def _load_font(size: int, scale: int = 1):
-    for path in FONT_CANDIDATES:
-        if Path(path).exists():
-            f = ImageFont.truetype(path, size * scale)
-            return _LogicalFont(f, scale) if scale != 1 else f
-    return ImageFont.load_default()
+def _load_font(size: int, scale: int = 1, italic: bool = False):
+    candidates = ITALIC_FONT_CANDIDATES if italic else FONT_CANDIDATES
+    for path in candidates:
+        if not Path(path).exists():
+            continue
+        try:
+            # Menlo.ttc is a collection; index 1 is the italic face
+            if italic and path.endswith(".ttc"):
+                f = ImageFont.truetype(path, size * scale, index=1)
+            else:
+                f = ImageFont.truetype(path, size * scale)
+        except (OSError, IOError):
+            continue
+        return _LogicalFont(f, scale) if scale != 1 else f
+    return _load_font(size, scale) if italic else ImageFont.load_default()
 
 
 def tokenize_line(line: str) -> list[tuple[str, str]]:
@@ -435,20 +458,23 @@ def _draw_neg_panel(draw, kind, x0, top, bottom, W, theme, rng, font_ui):
             y += 20
 
 
-def _draw_code_line(draw, x, y, tokens, theme, font, ghost=False):
+def _draw_code_line(draw, x, y, tokens, theme, font, ghost=False,
+                    ghost_font=None):
+    f = (ghost_font or font) if ghost else font
     for tok, kind in tokens:
         color = theme["ghost"] if ghost else theme[kind]
-        draw.text((x, y), tok, fill=color, font=font)
-        x += font.getlength(tok)
+        draw.text((x, y), tok, fill=color, font=f)
+        x += f.getlength(tok)
     return x
 
 
 def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
                       theme, rng, filenames, panel=None, scale: int = 1,
-                      inlay: bool = False):
+                      inlay: bool = False, lightbulb: bool = False):
     W, H = rng.choice(WINDOW_SIZES)
     font_size = rng.randint(12, 15)
     font = _load_font(font_size, scale)
+    font_italic = _load_font(font_size, scale, italic=True)
     font_ui = _load_font(12, scale)
     line_h = font_size + 7
 
@@ -486,13 +512,17 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
                   fill=theme["gutter_active"] if is_cursor else theme["gutter"],
                   font=font)
 
+        y_first = y
         if ghost_here:
-            # typed prefix in normal colors, suggestion continues dimmed
+            # typed prefix in normal colours, suggestion continues dimmed and
+            # italic. A whole-line suggestion (empty prefix) is the common
+            # case in practice - the caret sits at the start of a blank line
+            # and the entire proposed line is rendered as ghost text.
             prefix, first_ghost = ghost_lines[0]
             x_end = _draw_code_line(draw, code_x, y, tokenize_line(prefix), theme, font)
             cursor_x = x_end
             gx1 = _draw_code_line(draw, x_end, y, [(first_ghost, "default")],
-                                  theme, font, ghost=True)
+                                  theme, font, ghost=True, ghost_font=font_italic)
             # remember exactly where the dim text landed, so tiles covering it
             # can be labelled without guessing
             ghost_box = [x_end, y, gx1, y + line_h]
@@ -502,10 +532,17 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
                 if row >= n_visible:
                     break
                 cx1 = _draw_code_line(draw, code_x, y, [(cont, "default")],
-                                      theme, font, ghost=True)
+                                      theme, font, ghost=True,
+                                      ghost_font=font_italic)
                 ghost_box[0] = min(ghost_box[0], code_x)
                 ghost_box[2] = max(ghost_box[2], cx1)
                 ghost_box[3] = y + line_h
+            # the quick-fix lightbulb the editor puts in the gutter beside an
+            # active suggestion
+            if lightbulb:
+                bx = sidebar_w + gutter_w - 30
+                draw.ellipse([bx, y_first + 3, bx + 9, y_first + 12],
+                             fill=theme["func"])
             boxes.append({"kind": "ghost",
                           "box": [int(v) for v in ghost_box]})
         else:
@@ -585,9 +622,26 @@ def make_sample(corpus, rng, variant: str, scale: int = 1):
 
     ghost = []
     if with_ghost:
+        # The suggestion has to be worth seeing. Parking the caret on a blank
+        # or near-blank line produces a "suggestion" one space wide: an image
+        # labelled positive that shows nothing at all, which is label noise on
+        # the hardest class.
+        usable = [i for i in range(start, min(start + 30, len(lines) - 1))
+                  if len(lines[i].strip()) >= MIN_GHOST_CHARS]
+        if usable:
+            cursor_line = rng.choice(usable)
         full = lines[cursor_line]
         stripped = len(full) - len(full.lstrip())
-        cut = rng.randint(stripped, max(stripped, len(full) - 1)) if full.strip() else stripped
+        if rng.random() < 0.6:
+            # whole-line suggestion: caret sits at the indent and the entire
+            # proposed line is ghost text. This is what the real captures
+            # mostly show, and it looks quite different from a mid-line
+            # completion, so both patterns need to be in the training set.
+            cut = stripped
+        else:
+            # leave at least MIN_GHOST_CHARS of the line as the suggestion
+            hi = max(stripped, len(full.rstrip()) - MIN_GHOST_CHARS)
+            cut = rng.randint(stripped, hi) if hi > stripped else stripped
         ghost = [(full[:cut], full[cut:] or " ")]
         n_more = rng.choices([0, 1, 2, 3, 5], weights=[2, 3, 3, 2, 1])[0]
         if n_more:
@@ -598,7 +652,7 @@ def make_sample(corpus, rng, variant: str, scale: int = 1):
                 ghost.append(indent + extra.strip() if extra.strip() else " ")
     return render_screenshot(file_name, lines, start, cursor_line, ghost,
                              theme, rng, filenames, panel=panel, scale=scale,
-                             inlay=inlay)
+                             inlay=inlay, lightbulb=rng.random() < 0.5)
 
 
 def make_image(corpus, rng, variant: str, scale: int = 1):
@@ -607,17 +661,22 @@ def make_image(corpus, rng, variant: str, scale: int = 1):
     return img
 
 
-def _plan(n_active: int, n_clean: int, hard_neg_frac: float, rng):
+def _plan(n_active: int, n_clean: int, hard_neg_frac: float, rng,
+          ghost_only: bool = False):
     """Positives split across the two ways an assistant shows up; a chunk of the
     negatives carry a non-chat panel so position alone is not a giveaway.
 
-    Weighted towards ghost text: panels are already detected perfectly, so
-    extra panel examples buy nothing, while ghost text is where every
-    remaining error lives."""
+    With ghost_only the model is trained purely as a ghost-text detector and
+    chat panels are left to the OCR keyword detector, which identifies them
+    exactly. Every positive then targets the one thing the model is actually
+    needed for."""
     jobs = []
     for i in range(n_active):
         r = i / max(1, n_active)
-        variant = "ghost" if r < 0.60 else ("panel" if r < 0.80 else "both")
+        if ghost_only:
+            variant = "ghost"
+        else:
+            variant = "ghost" if r < 0.60 else ("panel" if r < 0.80 else "both")
         jobs.append(("copilot_active", variant))
     n_hard = int(n_clean * hard_neg_frac)
     jobs += [("no_copilot", "hardneg")] * n_hard
@@ -628,12 +687,12 @@ def _plan(n_active: int, n_clean: int, hard_neg_frac: float, rng):
 
 def generate(out_dir: Path, n_active: int, n_clean: int, sessions: int,
              seed: int, corpus_roots: list[Path], hard_neg_frac: float = 0.5,
-             scale: int = 1):
+             scale: int = 1, ghost_only: bool = False):
     rng = random.Random(seed)
     corpus = load_corpus(corpus_roots)
     log.info("Corpus: %d files", len(corpus))
 
-    jobs = _plan(n_active, n_clean, hard_neg_frac, rng)
+    jobs = _plan(n_active, n_clean, hard_neg_frac, rng, ghost_only)
 
     counters: dict[str, int] = {}
     tally: dict[str, int] = {}
@@ -669,7 +728,7 @@ def generate(out_dir: Path, n_active: int, n_clean: int, sessions: int,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, default=Path("data/"))
+    ap.add_argument("--out", type=Path, default=Path("data_vscode/"))
     ap.add_argument("--n-active", type=int, default=150)
     ap.add_argument("--n-clean", type=int, default=150)
     ap.add_argument("--sessions", type=int, default=15)
@@ -681,13 +740,17 @@ def main():
     ap.add_argument("--scale", type=int, default=1,
                     help="pixel density: 2 renders Retina-scale captures "
                          "(~2560x1600 to 3360x2100) matching real screenshots")
+    ap.add_argument("--ghost-only", action="store_true",
+                    help="every positive is inline ghost text; chat panels are "
+                         "left to the OCR keyword detector")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s: %(message)s",
                         datefmt="%H:%M:%S")
     generate(args.out, args.n_active, args.n_clean, args.sessions,
-             args.seed, args.corpus, args.hard_neg_frac, args.scale)
+             args.seed, args.corpus, args.hard_neg_frac, args.scale,
+             args.ghost_only)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,27 @@ def test_plan_balances_positive_variants():
     assert pos.count("panel") >= 15 and pos.count("ghost") >= 20
 
 
+def test_ghost_only_plan_has_no_panels():
+    jobs = _plan(100, 100, hard_neg_frac=0.35, rng=random.Random(0),
+                 ghost_only=True)
+    pos = [v for lab, v in jobs if lab == "copilot_active"]
+    assert set(pos) == {"ghost"}
+
+
+def test_ghost_suggestion_is_never_degenerate():
+    """A suggestion one space wide is an image labelled positive that shows
+    nothing - label noise on the hardest class. 10% of an earlier dataset
+    was like this."""
+    rng = random.Random(7)
+    corpus = _corpus()
+    for _ in range(40):
+        _, boxes = make_sample(corpus, rng, "ghost")
+        ghost = [b for b in boxes if b["kind"] == "ghost"]
+        assert ghost, "ghost variant produced no ghost region"
+        x0, _, x1, _ = ghost[0]["box"]
+        assert x1 - x0 > 30, f"degenerate ghost region {x1 - x0}px wide"
+
+
 def test_plan_favours_ghost_over_panel():
     # panels are already detected perfectly; ghost text is where the errors are
     jobs = _plan(100, 100, hard_neg_frac=0.5, rng=random.Random(0))
