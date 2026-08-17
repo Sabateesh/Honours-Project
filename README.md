@@ -1,4 +1,4 @@
-# CoMas Screenshot Triage
+# CoMas Screenshot Checker
 
 ![Carleton University](comas/assets/carleton_logo.png)
 
@@ -113,18 +113,6 @@ the destination to `C:\CoMas` → Extract.
 leaves next to it.
 
 
-## Check it worked
-
-```bash
-tesseract --version                                    # prints a version
-python -c "import tkinter; print(tkinter.TkVersion)"   # must be 8.6, not 8.5
-pytest -q                                              # 57 passed, 2 skipped
-```
-
-If `tkinter.TkVersion` says 8.5, the window will render blank. On macOS install
-Homebrew's `python-tk@3.11`; on Windows reinstall Python with the tcl/tk
-component enabled.
-
 ## The detection model
 
 The trained model ships **inside the repository**, so a clone or a ZIP download
@@ -155,25 +143,21 @@ drop them into `checkpoints/` by hand.
 | **Brightspace Cheating** | a quiz taken in the browser |
 | **VSCODE + Brightspace Cheating** | an exam involving both |
 
-The mode matters. In combined mode a VS Code window isn't treated as having
-left the quiz, because the student is legitimately expected to be in the editor.
 
-**2. Upload the screenshots** CoMas captured. Analysis runs in the background
-with a progress line, so the window stays responsive.
+**2. Upload the screenshots** 
 
 **3. Review the queue.** The most suspicious images come first. Each shows its
 score, a plain-language reason, and a red box around the region that triggered
 the flag.
 
-**4. Triage each one** as **Reviewed** or **Dismissed**.
+**4. Check each one** as **Reviewed** or **Dismissed**.
 
 **5. Export.** You get a timestamped folder with copies of the flagged images,
 a CSV of every score, and a summary suitable for an academic integrity case.
 
-**Keyboard:** `←` `→` navigate, `r` reviewed, `d` dismiss, `c` clear, `e` export.
 
 The threshold slider adjusts sensitivity live without re-running the analysis.
-Lower it to see marginal cases, raise it if the queue is noisy.
+Lower it to see marginal cases, raise it is noisy.
 
 ---
 
@@ -205,13 +189,6 @@ On 27 **real** screenshots (14 with ghost text, 13 without):
 |---|---|---|
 | OCR keywords only | 3/14 | 2/13 |
 | **shipped model + OCR** | **11/14** | **1/13** |
-
-Synthetic evaluation did not just overstate real performance, it inverted model
-selection. The shipped checkpoint scores 0.554 AUROC on held-out *synthetic*
-data and 0.868 on real screenshots; the checkpoint with the best synthetic score
-(0.999) reached only 0.786 on real ones. See `report/` for the full analysis.
-
-Small sample: 27 images. Treat these as counts, not precise percentages.
 
 ---
 
@@ -262,16 +239,6 @@ report/                     honours project report (LaTeX)
 
 ---
 
-## Limitations
-
-- Evaluated on 27 real screenshots — a small sample.
-- The model is trained on synthetic data and does not transfer perfectly;
-  roughly 3 in 14 real ghost-text screenshots are missed.
-- Keyword detection breaks when a vendor renames interface text, so the list
-  needs reviewing each term.
-- Only GitHub Copilot and Cursor are covered by name.
-- Each screenshot is judged alone; patterns across a student's session are not
-  modelled.
 
 ## Licence
 
