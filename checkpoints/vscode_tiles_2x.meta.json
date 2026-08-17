@@ -1,0 +1,6 @@
+{
+  "text_emb_dim": 0,
+  "use_ocr": false,
+  "cnn_backbone": "resnet50",
+  "img_size": 512
+}

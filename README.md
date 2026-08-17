@@ -1,132 +1,179 @@
 # CoMas Screenshot Triage
 
-Flags suspicious screenshots from CoMas online exams so a proctor reviews the
-most likely cases first instead of clicking through thousands of images.
-
-Two detection tasks:
-
-1. **AI coding assistant in VS Code** — an open chat panel, or an inline
-   "ghost text" suggestion at the cursor.
-2. **Brightspace tab-leave** — the student navigated away from their quiz.
-
 ![Carleton University](comas/assets/carleton_logo.png)
+
+## What this is
+
+CoMas is the proctoring tool Carleton uses for online exams. It takes mutiple
+screenshot of each student's desktop druing an exam. One exam with a few hundred students
+produces tens of thousands of screenshots, so nobody can look at them all
+properly and review ends up shallow and inconsistent.
+
+This desktop app reads a folder of those screenshots and **sorts them
+by how suspicious they look**, so a TA reviews the images most worth
+their attention instead of clicking through ten thousand.
+
+It never decides that anyone cheated. It produces a ranking and a score, and a
+human makes every call.
+
+It looks for two specific things:
+
+1. **An AI coding assistant in VS Code** — either an open Copilot or Cursor
+   chat panel, or an inline "ghost text" suggestion sitting at the cursor.
+
+2. **Leaving the Brightspace quiz** — the student navigated away from the quiz
+   page they were supposed to be on.
+
+You give it a folder of screenshots; it gives you a ranked queue with the
+suspicious region boxed in red, buttons to mark each one reviewed or dismissed,
+and an export you can attach to an academic integrity case.
 
 ---
 
-## Install
+# Getting it running
 
-### Quick install
+You need three things: **Python**, **Tesseract** (reads text out of images),
+and the **project itself**. The installer handles everything after that.
 
-Download the repository ([ZIP](https://github.com/Sabateesh/Honours-Project/archive/refs/heads/main.zip)
-or `git clone`), then:
 
-| | |
-|---|---|
-| **macOS / Linux** | open a terminal in the folder and run `./install.sh` |
-| **Windows** | extract the ZIP to a short path such as `C:\CoMas`, then double-click `install.bat` |
+## macOS — step by step
 
-> **Windows:** extract the ZIP before running the installer, and keep the
-> folder path short. Double-clicking `install.bat` from inside the ZIP makes
-> Windows unpack it to a long temporary folder, and PyTorch's deeply nested
-> headers then breach the 260-character path limit — pip fails with a
-> misleading "No such file or directory". `install.bat` checks for this and
-> stops early.
+**1. Install Homebrew** if you don't have it. Open Terminal (Cmd+Space, type
+"Terminal") and paste:
 
-The installer checks your Python and Tesseract, creates an isolated
-environment, installs the app, downloads the detection model, and leaves a
-double-clickable launcher next to it. Re-running it is safe.
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
 
-It needs to download PyTorch (~2 GB), so allow ten minutes or so.
-
-### Manual install
-
-**Requirements:** Python 3.10+ and Tesseract. On macOS you must *not* use the
-Python bundled with Xcode — it ships an old Tk that renders the window
-incorrectly.
-
-### macOS
+**2. Install Python and Tesseract:**
 
 ```bash
 brew install python@3.11 python-tk@3.11 tesseract
-git clone https://github.com/Sabateesh/Honours-Project.git
-cd Honours-Project
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e .
 ```
 
-### Windows
+`python-tk` is not optional. macOS ships an older Python whose window toolkit
+has a rendering bug that draws the app as a blank grey box.
 
-Install [Python 3.11+](https://www.python.org/downloads/) — tick "Add python.exe
-to PATH" and keep the "tcl/tk and IDLE" component.
-
-Then install [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki). Its
-installer has no "add to PATH" option and the location depends on the install
-type — `%LOCALAPPDATA%\Tesseract-OCR` for "just me", `C:\Program
-Files\Tesseract-OCR` for "all users". `install.bat` checks both, so prefer it.
-Installing manually, add whichever folder holds `tesseract.exe` to Path
-(Environment Variables → User variables for a per-user install), open a new
-command prompt, and confirm `tesseract --version` works. Then:
-
-```bat
-git clone https://github.com/Sabateesh/Honours-Project.git
-cd Honours-Project
-python -m venv .venv && .venv\Scripts\activate
-pip install -e .
-```
-
-### Linux
+**3. Download the project.** Either clone it:
 
 ```bash
-sudo apt install python3.11 python3-tk tesseract-ocr
 git clone https://github.com/Sabateesh/Honours-Project.git
 cd Honours-Project
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e .
 ```
 
-### Download the detection model
+or download the [ZIP](https://github.com/Sabateesh/Honours-Project/archive/refs/heads/main.zip),
+double-click to unzip, and `cd` into the folder.
 
-The trained model is ~90 MB, too large for the repository. Download
-`vscode_tiles_2x.pt` and `vscode_tiles_2x.meta.json` from the
-[Releases page](https://github.com/Sabateesh/Honours-Project/releases) and put
-both in `checkpoints/`:
-
-```
-Honours-Project/
-  checkpoints/
-    vscode_tiles_2x.pt
-    vscode_tiles_2x.meta.json
-```
-
-The app runs without it but falls back to text-only detection, which misses
-most inline suggestions.
-
-### Verify
+**4. Run the installer:**
 
 ```bash
+./install.sh
+```
+
+It checks your Python and Tesseract, builds an isolated environment, installs
+the app, and checks the detection model is present. Re-running it is safe.
+
+**5. Start it.** Double-click **`Run CoMas Triage.command`**, which the
+installer leaves in the folder. Or from Terminal:
+
+```bash
+source .venv/bin/activate
+comas-triage
+```
+
+## Windows — step by step
+
+**1. Install Python** from [python.org/downloads](https://www.python.org/downloads/).
+
+Two things you must get right in the setup window:
+
+- tick **"Add python.exe to PATH"** on the first screen — it's easy to miss
+- leave **"tcl/tk and IDLE"** enabled under Optional Features — that's the
+  window toolkit, and the app cannot open without it
+
+**2. Install Tesseract** from the
+[UB-Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki).
+
+Just run it with the defaults. It has no "add to PATH" option and it installs
+somewhere different depending on whether you pick "just me" or "all users" —
+`install.bat` checks both locations and wires it up for you, so you don't need
+to touch environment variables.
+
+**3. Download the project** as a
+[ZIP](https://github.com/Sabateesh/Honours-Project/archive/refs/heads/main.zip).
+
+**4. Extract it to `C:\CoMas`.** Right-click the ZIP → **Extract All** → change
+the destination to `C:\CoMas` → Extract.
+
+-Download 
+
+**5. Run the installer.** Open `C:\CoMas` and double-click **`install.bat`**.
+
+**6. Start it.** Double-click **`Run CoMas Triage.bat`**, which the installer
+leaves next to it.
+
+
+## Check it worked
+
+```bash
+tesseract --version                                    # prints a version
 python -c "import tkinter; print(tkinter.TkVersion)"   # must be 8.6, not 8.5
 pytest -q                                              # 57 passed, 2 skipped
 ```
 
----
+If `tkinter.TkVersion` says 8.5, the window will render blank. On macOS install
+Homebrew's `python-tk@3.11`; on Windows reinstall Python with the tcl/tk
+component enabled.
 
-## Use
+## The detection model
 
-```bash
-comas-triage          # or: python -m comas.gui
+The trained model ships **inside the repository**, so a clone or a ZIP download
+already has everything and the install needs no network access for it:
+
+```
+Honours-Project/
+  checkpoints/
+    vscode_tiles_2x.pt          90 MB, the ResNet50 ghost-text detector
+    vscode_tiles_2x.meta.json   backbone and input size the app reads on load
 ```
 
-1. Pick a detection mode.
-2. Upload the screenshots CoMas captured.
-3. Review the ranked queue — most suspicious first, with the suspected region
-   boxed in red.
-4. Mark each **Reviewed** or **Dismissed**, then **Export report**.
+If those two files are ever missing, the app still starts but falls back to
+text-only detection, which finds 3 of 14 real ghost-text screenshots instead of
+11. The installer notices and pulls them from
+[Releases](https://github.com/Sabateesh/Honours-Project/releases); you can also
+drop them into `checkpoints/` by hand.
+
+---
+
+# Using it
+
+**1. Pick a detection mode** on the opening screen:
+
+| mode | use it for |
+|---|---|
+| **VSCODE Cheating** | a programming exam written in an editor |
+| **Brightspace Cheating** | a quiz taken in the browser |
+| **VSCODE + Brightspace Cheating** | an exam involving both |
+
+The mode matters. In combined mode a VS Code window isn't treated as having
+left the quiz, because the student is legitimately expected to be in the editor.
+
+**2. Upload the screenshots** CoMas captured. Analysis runs in the background
+with a progress line, so the window stays responsive.
+
+**3. Review the queue.** The most suspicious images come first. Each shows its
+score, a plain-language reason, and a red box around the region that triggered
+the flag.
+
+**4. Triage each one** as **Reviewed** or **Dismissed**.
+
+**5. Export.** You get a timestamped folder with copies of the flagged images,
+a CSV of every score, and a summary suitable for an academic integrity case.
 
 **Keyboard:** `←` `→` navigate, `r` reviewed, `d` dismiss, `c` clear, `e` export.
 
-The threshold slider adjusts sensitivity live. The export writes a timestamped
-folder with copies of the flagged images, a CSV of all scores, and a summary
-suitable for attaching to an academic integrity case.
+The threshold slider adjusts sensitivity live without re-running the analysis.
+Lower it to see marginal cases, raise it if the queue is noisy.
 
 ---
 
@@ -142,7 +189,7 @@ evidence a human can verify at a glance, so it sorts to the top of the queue.
 **Inline ghost text** contains no identifying text at all — it is ordinary code
 rendered in dim italic. Only a vision model can see it. A ResNet50 is applied
 to overlapping native-resolution tiles of the screenshot, and the highest tile
-score wins; the winning tile is what the GUI boxes in red.
+score wins; the winning tile is what the app boxes in red.
 
 The Brightspace detector uses no machine learning. It recognises the one
 legitimate state (the quiz is on screen) and treats anything else as a

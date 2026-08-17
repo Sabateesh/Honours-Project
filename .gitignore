@@ -1,5 +1,7 @@
-# Trained models: ~90 MB each, well past what belongs in a git repo.
-# The shipped checkpoint is published on GitHub Releases instead; see README.
+# Trained models are ~90 MB each. Only the one the app actually ships with is
+# committed (checkpoints/vscode_tiles_2x.*, force-added below the ignore rule),
+# so a fresh clone or ZIP works with no download step. Every other checkpoint
+# is experimental and stays out.
 checkpoints/
 *.pt
 
