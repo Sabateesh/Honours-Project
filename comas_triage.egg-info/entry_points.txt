@@ -1,0 +1,2 @@
+[console_scripts]
+comas-triage = comas.gui:main

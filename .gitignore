@@ -30,3 +30,7 @@ data_neg.csv
 .DS_Store
 .vscode/
 .claude/
+
+# launchers written by the installer
+Run CoMas Triage.command
+Run CoMas Triage.bat

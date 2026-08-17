@@ -1,0 +1,14 @@
+torch>=2.0
+torchvision>=0.15
+pillow>=10.0
+pytesseract>=0.3.10
+pyyaml>=6.0
+numpy>=1.24
+
+[dev]
+pytest>=7.4
+
+[train]
+scikit-learn>=1.3
+pandas>=2.0
+tqdm>=4.65
