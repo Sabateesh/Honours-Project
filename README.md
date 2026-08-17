@@ -49,8 +49,16 @@ pip install -e .
 
 ### Windows
 
-Install [Python 3.11+](https://www.python.org/downloads/) (tick "Add to PATH")
-and [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki), then:
+Install [Python 3.11+](https://www.python.org/downloads/) — tick "Add python.exe
+to PATH" and keep the "tcl/tk and IDLE" component.
+
+Then install [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki). Its
+installer has no "add to PATH" option and the location depends on the install
+type — `%LOCALAPPDATA%\Tesseract-OCR` for "just me", `C:\Program
+Files\Tesseract-OCR` for "all users". `install.bat` checks both, so prefer it.
+Installing manually, add whichever folder holds `tesseract.exe` to Path
+(Environment Variables → User variables for a per-user install), open a new
+command prompt, and confirm `tesseract --version` works. Then:
 
 ```bat
 git clone https://github.com/Sabateesh/Honours-Project.git
@@ -90,7 +98,7 @@ most inline suggestions.
 
 ```bash
 python -c "import tkinter; print(tkinter.TkVersion)"   # must be 8.6, not 8.5
-pytest -q                                              # 60 tests
+pytest -q                                              # 57 passed, 2 skipped
 ```
 
 ---
@@ -144,10 +152,10 @@ On 27 **real** screenshots (14 with ghost text, 13 without):
 | OCR keywords only | 3/14 | 2/13 |
 | **shipped model + OCR** | **11/14** | **1/13** |
 
-The model reaches 0.999 AUROC on held-out *synthetic* data but 0.868 on real
-screenshots. Synthetic scores substantially overstate real performance — see
-`report/` for the full analysis, including a ranking comparison in which
-synthetic and real evaluation disagreed on which model was best.
+Synthetic evaluation did not just overstate real performance, it inverted model
+selection. The shipped checkpoint scores 0.554 AUROC on held-out *synthetic*
+data and 0.868 on real screenshots; the checkpoint with the best synthetic score
+(0.999) reached only 0.786 on real ones. See `report/` for the full analysis.
 
 Small sample: 27 images. Treat these as counts, not precise percentages.
 
@@ -192,7 +200,7 @@ comas/
   diagnose.py               per-image explanation of a verdict
   compare_checkpoints.py    rank checkpoints on real data
   variant_report.py         per-variant synthetic breakdown
-tests/                      60 tests
+tests/                      59 tests
 test_shots_positive/        14 real screenshots with ghost text
 test_shots/                 13 real screenshots without
 report/                     honours project report (LaTeX)

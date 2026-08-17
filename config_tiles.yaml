@@ -1,0 +1,57 @@
+# Tiled model. Each training example is a crop covering about a third of a
+# screenshot. The input size must be at least the tile's own pixel size,
+# otherwise the tile is downscaled again and the whole point of tiling is lost:
+# at 384 a real 794px tile was being halved, leaving ghost text no better off
+# than under whole-image scoring. 512 keeps ghost text large relative to
+# ResNet's 32x downsampling while remaining trainable in about 40 minutes.
+data:
+  root: data_tiles/
+  img_size: 512
+  num_workers: 4
+  batch_size: 12
+  val_frac: 0.15
+  test_frac: 0.15
+  seed: 42
+
+# Mild by design: ghost text is a pixel or two of dim colour and aggressive
+# downscaling or blur destroys the only signal that distinguishes it.
+augment:
+  downscale_p: 0.5
+  downscale_min: 0.75
+  downscale_max: 0.95
+  jpeg_p: 0.25
+  jpeg_qmin: 65
+  jpeg_qmax: 95
+  blur_p: 0.15
+  blur_min: 0.3
+  blur_max: 0.6
+
+# Applied at inference: cut the screenshot into tiles, score each, take the max.
+tile:
+  enabled: true
+  tile_frac: 0.34
+  overlap: 0.35
+  min_px: 256
+
+model:
+  use_ocr: false
+  cnn_backbone: resnet50
+  text_encoder: sentence-transformers/all-MiniLM-L6-v2
+  fusion_hidden: 256
+  dropout: 0.3
+
+train:
+  # best validation AUPRC landed at epoch 2 of the first 8-epoch run and
+  # declined after, so the extra epochs only overfit
+  epochs: 5
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  pos_weight_auto: true
+  pos_weight_override: null
+
+paths:
+  checkpoint: checkpoints/vscode_tiles_2x.pt
+  ocr_cache: cache/ocr.json
+
+logging:
+  level: INFO

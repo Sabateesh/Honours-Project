@@ -37,18 +37,42 @@ if "%PY%"=="" (
 for /f "delims=" %%V in ('%PY% --version') do echo Python:    %%V
 
 REM ---------------------------------------------------------- Tesseract ---
+REM The UB-Mannheim installer has no "add to PATH" option, and installs to
+REM AppData for a per-user install or Program Files for an all-users one.
+REM Rather than making the user edit PATH, look in the known locations and
+REM bake whatever we find into the launcher.
+set TESSDIR=
+where tesseract >nul 2>&1
+if not errorlevel 1 (
+    echo Tesseract: found on PATH
+) else (
+    for %%D in (
+        "%LOCALAPPDATA%\Tesseract-OCR"
+        "%LOCALAPPDATA%\Programs\Tesseract-OCR"
+        "%ProgramFiles%\Tesseract-OCR"
+        "%ProgramFiles(x86)%\Tesseract-OCR"
+    ) do (
+        if exist "%%~D\tesseract.exe" if not defined TESSDIR set "TESSDIR=%%~D"
+    )
+)
+
+if defined TESSDIR (
+    echo Tesseract: found in !TESSDIR!
+    set "PATH=!TESSDIR!;%PATH%"
+)
+
 where tesseract >nul 2>&1
 if errorlevel 1 (
     echo.
-    echo WARNING: Tesseract is not installed or not on PATH.
-    echo Text-based detection will not work without it.
-    echo Get it from https://github.com/UB-Mannheim/tesseract/wiki
-    echo and tick "Add to PATH" during setup.
+    echo WARNING: Tesseract not found. Text-based detection will not work,
+    echo so chat panels and Brightspace tab-leaves will be missed.
+    echo.
+    echo Install it from https://github.com/UB-Mannheim/tesseract/wiki
+    echo then run this installer again - it looks in the default locations,
+    echo so you do not need to edit PATH yourself.
     echo.
     set /p CONT="Continue without it? [y/N] "
     if /i not "!CONT!"=="y" exit /b 1
-) else (
-    echo Tesseract: found
 )
 
 REM -------------------------------------------------------- environment ---
@@ -95,6 +119,8 @@ REM ----------------------------------------------------------- launcher ---
 > "Run CoMas Triage.bat" echo @echo off
 >> "Run CoMas Triage.bat" echo cd /d "%%~dp0"
 >> "Run CoMas Triage.bat" echo call .venv\Scripts\activate.bat
+REM Tesseract is not on PATH for a per-user install, so pin it in the launcher
+if defined TESSDIR >> "Run CoMas Triage.bat" echo set "PATH=!TESSDIR!;%%PATH%%"
 >> "Run CoMas Triage.bat" echo comas-triage
 
 echo.
