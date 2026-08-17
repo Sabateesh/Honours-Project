@@ -80,14 +80,18 @@ class RandomBlur:
         return img.filter(ImageFilter.GaussianBlur(random.uniform(*self.radius)))
 
 
-def build_transforms(img_size: int) -> tuple[Any, Any]:
+def build_transforms(img_size: int, aug=None) -> tuple[Any, Any]:
     if not _ML_AVAILABLE:
         raise RuntimeError("torch/torchvision required")
+    if aug is None:
+        from .config import AugmentConfig
+        aug = AugmentConfig()
     train_tfms = transforms.Compose([
         transforms.Resize((img_size, img_size)),
-        RandomDownscale(),
-        RandomJPEG(),
-        RandomBlur(),
+        RandomDownscale(p=aug.downscale_p,
+                        scale=(aug.downscale_min, aug.downscale_max)),
+        RandomJPEG(p=aug.jpeg_p, quality=(aug.jpeg_qmin, aug.jpeg_qmax)),
+        RandomBlur(p=aug.blur_p, radius=(aug.blur_min, aug.blur_max)),
         transforms.ColorJitter(brightness=0.1, contrast=0.1),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -187,7 +191,8 @@ def build_loaders(cfg) -> dict:
     train, val, test = session_split(samples, dcfg.val_frac, dcfg.test_frac, dcfg.seed)
     log.info("split: %d train / %d val / %d test", len(train), len(val), len(test))
 
-    train_tfms, eval_tfms = build_transforms(dcfg.img_size)
+    train_tfms, eval_tfms = build_transforms(dcfg.img_size,
+                                             getattr(cfg, "augment", None))
 
     train_embs = val_embs = test_embs = None
     text_emb_dim = 0

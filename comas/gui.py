@@ -3,11 +3,12 @@ import queue
 import shutil
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 from .brightspace import BrightspaceDetector
 from .config import load_config
@@ -39,22 +40,92 @@ SMALL = (FONT, 11)
 TINY = (FONT, 10)
 
 MODES = ["VSCODE Cheating", "Brightspace Cheating", "VSCODE + Brightspace Cheating"]
-# Recall-first default, set aggressively low on purpose: reviewers dismiss a
-# benign flag in one click, but a missed cheat is invisible. Ghost text is the
-# model's weakest signal and much of it scores in the 0.2-0.6 band; false
-# positives are the accepted cost and the slider raises the bar per run.
-FLAG_THRESHOLD = 0.20
+# Recall-first, calibrated on the Retina-scale holdout: 0.50 catches 90% of
+# ghost text while flagging 32% of clean editors. Thresholds are specific to a
+# checkpoint - the previous model needed 0.20 for comparable recall, and using
+# that value here would flag every screenshot. Re-derive with
+# `python3 -m comas.variant_report` after retraining.
+FLAG_THRESHOLD = 0.50
 VIEW_W, VIEW_H = 1160, 620
 
 
-def flat(btn, bg, fg, hover_bg, font=BODY, padx=18, pady=10):
-    btn.config(bg=bg, fg=fg, font=font, padx=padx, pady=pady,
-               borderwidth=0, relief="flat", highlightthickness=0,
-               activebackground=hover_bg, activeforeground=fg,
-               cursor="hand2")
-    btn.bind("<Enter>", lambda e: btn["state"] == "normal" and btn.config(bg=hover_bg))
-    btn.bind("<Leave>", lambda e: btn["state"] == "normal" and btn.config(bg=bg))
-    return btn
+def _pill(w, h, radius, fill, outline, supersample=3):
+    """A rounded rectangle drawn with PIL and downsampled, which anti-aliases
+    the corners. Tk cannot draw a smooth rounded rect itself."""
+    s = supersample
+    img = Image.new("RGBA", (w * s, h * s), (0, 0, 0, 0))
+    ImageDraw.Draw(img).rounded_rectangle(
+        [0, 0, w * s - 1, h * s - 1], radius=radius * s,
+        fill=fill, outline=outline, width=s)
+    return ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS))
+
+
+class Button(tk.Label):
+    """A flat, rounded button.
+
+    macOS renders tk.Button with the native Aqua theme and quietly ignores the
+    background colour, so a styled tk.Button comes out as a stock grey pill no
+    matter how it is configured. A Label accepts an image and centred text
+    together (compound="center"), so painting the shape with PIL gives full
+    control over colour, radius and hover state on every platform."""
+
+    def __init__(self, parent, text, command=None, bg=CARD, fg=INK,
+                 hover=None, border=None, font=BODY, padx=20, pady=11,
+                 radius=9, width=None):
+        self._command = command
+        self._font = font
+        self._radius = radius
+        self._enabled = True
+
+        f = tkfont.Font(family=font[0], size=font[1],
+                        weight=font[2] if len(font) > 2 else "normal")
+        # NB: not _w / _h - tkinter.Misc stores the widget's Tcl path in
+        # self._w, and super().__init__ would overwrite our width with it
+        self._pill_w = width or f.measure(text) + padx * 2
+        self._pill_h = f.metrics("linespace") + pady * 2
+
+        self._paint(bg, fg, hover, border)
+        super().__init__(parent, image=self._img_normal, text=text,
+                         compound="center", fg=fg, font=font,
+                         bg=parent.cget("bg"), bd=0, highlightthickness=0,
+                         cursor="hand2")
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_click)
+
+    def _paint(self, bg, fg, hover, border):
+        self._bg, self._fg = bg, fg
+        self._hover = hover or bg
+        self._border = border or bg
+        # keep references: Tk does not own PhotoImage and it would be
+        # garbage collected, leaving a blank button
+        self._img_normal = _pill(self._pill_w, self._pill_h, self._radius,
+                                 self._bg, self._border)
+        self._img_hover = _pill(self._pill_w, self._pill_h, self._radius,
+                                self._hover, self._border)
+
+    def _on_enter(self, _=None):
+        if self._enabled:
+            self.config(image=self._img_hover)
+
+    def _on_leave(self, _=None):
+        if self._enabled:
+            self.config(image=self._img_normal)
+
+    def _on_click(self, _=None):
+        if self._enabled and self._command:
+            self._command()
+
+    def restyle(self, bg=None, fg=None, hover=None, border=None):
+        self._paint(bg or self._bg, fg or self._fg,
+                    hover or self._hover, border or self._border)
+        self.config(image=self._img_normal, fg=self._fg)
+
+    def set_enabled(self, enabled, bg=None, fg=None, hover=None):
+        self._enabled = enabled
+        self.config(cursor="hand2" if enabled else "arrow")
+        if bg or fg or hover:
+            self.restyle(bg=bg, fg=fg, hover=hover)
 
 
 class App(tk.Tk):
@@ -102,17 +173,13 @@ class App(tk.Tk):
             img = Image.open(logo_path)
             img.thumbnail((260, 58), Image.LANCZOS)
             self._logo = ImageTk.PhotoImage(img)
-            home = tk.Button(inner, image=self._logo, command=self._go_home,
-                             bg=CARD, activebackground=CARD, borderwidth=0,
-                             relief="flat", highlightthickness=0,
-                             cursor="hand2", takefocus=0)
+            # a Label rather than a Button: Aqua would draw button chrome
+            # around the wordmark
+            home = tk.Label(inner, image=self._logo, bg=CARD, cursor="hand2")
         else:
-            home = tk.Button(inner, text="Carleton University",
-                             command=self._go_home, bg=CARD, fg=INK,
-                             activebackground=CARD, activeforeground=RED,
-                             font=(FONT, 20, "bold"), borderwidth=0,
-                             relief="flat", highlightthickness=0,
-                             cursor="hand2", takefocus=0)
+            home = tk.Label(inner, text="Carleton University", bg=CARD, fg=INK,
+                            font=(FONT, 20, "bold"), cursor="hand2")
+        home.bind("<Button-1>", lambda e: self._go_home())
         home.pack(side="left")
         self._home_btn = home
 
@@ -152,21 +219,22 @@ class App(tk.Tk):
         row = tk.Frame(wrap, bg=BG)
         row.pack()
         self.mode_buttons = {}
+        # size every mode button to the longest label so the row is even
+        _f = tkfont.Font(family=FONT, size=13, weight="bold")
+        card_w = _f.measure(max(MODES, key=len)) + 40
         for m in MODES:
-            card = tk.Frame(row, bg=CARD, highlightbackground=BORDER,
-                            highlightthickness=1)
-            card.pack(side="left", padx=9)
-            b = tk.Button(card, text=m, command=lambda m=m: self._select_mode(m))
-            flat(b, CARD, INK, "#f1f5f9", font=(FONT, 13, "bold"),
-                 padx=26, pady=18)
-            b.pack()
-            self.mode_buttons[m] = (card, b)
+            b = Button(row, m, command=lambda m=m: self._select_mode(m),
+                       bg=CARD, fg=INK, hover="#f1f5f9", border=BORDER,
+                       font=(FONT, 13, "bold"), pady=20, width=card_w)
+            b.pack(side="left", padx=7)
+            self.mode_buttons[m] = b
 
-        self.upload_btn = tk.Button(wrap, text="Upload CoMas Screenshots",
-                                    command=self._pick_files, state=tk.DISABLED)
-        flat(self.upload_btn, "#e2e8f0", FAINT, "#e2e8f0",
-             font=(FONT, 14, "bold"), padx=34, pady=14)
-        self.upload_btn.config(cursor="arrow")
+        self.upload_btn = Button(wrap, "Upload CoMas Screenshots",
+                                 command=self._pick_files,
+                                 bg="#e9edf2", fg=FAINT, hover="#e9edf2",
+                                 border="#e9edf2",
+                                 font=(FONT, 14, "bold"), padx=34, pady=15)
+        self.upload_btn.set_enabled(False)
         self.upload_btn.pack(pady=(44, 14))
 
         self.status = tk.Label(wrap, text="Choose a detection mode first",
@@ -175,25 +243,13 @@ class App(tk.Tk):
 
     def _select_mode(self, mode):
         self.mode = mode
-        for m, (card, b) in self.mode_buttons.items():
-            active = (m == mode)
-            card.config(highlightbackground=RED if active else BORDER,
-                        highlightthickness=2 if active else 1)
-            b.config(bg=RED if active else CARD,
-                     fg="#ffffff" if active else INK,
-                     activebackground=RED_DARK if active else "#f1f5f9",
-                     activeforeground="#ffffff" if active else INK)
-            b.unbind("<Enter>")
-            b.unbind("<Leave>")
-            if active:
-                b.bind("<Enter>", lambda e, b=b: b.config(bg=RED_DARK))
-                b.bind("<Leave>", lambda e, b=b: b.config(bg=RED))
+        for m, b in self.mode_buttons.items():
+            if m == mode:
+                b.restyle(bg=RED, fg="#ffffff", hover=RED_DARK, border=RED)
             else:
-                b.bind("<Enter>", lambda e, b=b: b.config(bg="#f1f5f9"))
-                b.bind("<Leave>", lambda e, b=b: b.config(bg=CARD))
-        self.upload_btn.config(state=tk.NORMAL)
-        flat(self.upload_btn, RED, "#ffffff", RED_DARK,
-             font=(FONT, 14, "bold"), padx=34, pady=14)
+                b.restyle(bg=CARD, fg=INK, hover="#f1f5f9", border=BORDER)
+        self.upload_btn.set_enabled(True, bg=RED, fg="#ffffff", hover=RED_DARK)
+        self.upload_btn.restyle(border=RED)
         self.status.config(text=f"Mode: {mode} — ready to upload", fg=DIM)
 
     # ----- detection --------------------------------------------------------
@@ -205,10 +261,11 @@ class App(tk.Tk):
         if not paths:
             return
         paths = [Path(p) for p in paths]
-        self.upload_btn.config(state=tk.DISABLED, bg="#e2e8f0", fg=FAINT,
-                               cursor="arrow")
-        for _, b in self.mode_buttons.values():
-            b.config(state=tk.DISABLED)
+        self.upload_btn.set_enabled(False, bg="#e9edf2", fg=FAINT,
+                                    hover="#e9edf2")
+        self.upload_btn.restyle(border="#e9edf2")
+        for b in self.mode_buttons.values():
+            b.set_enabled(False)
         signal_note = "OCR + ghost-text model" if "VSCODE" in self.mode else "OCR"
         self.status.config(text=f"Analyzing {len(paths)} screenshot(s)... "
                                 f"first run is slow ({signal_note})", fg=DIM)
@@ -237,7 +294,14 @@ class App(tk.Tk):
         if use_copilot:
             ml_scorer = self._get_ml_scorer()
             self._queue.put(("model_status", self._ml_status))
-            copilot = CopilotDetector(ocr_cache=self.ocr_cache, ml_scorer=ml_scorer)
+            # OCR runs on every screenshot here, even ones the model is sure
+            # about. The keywords are the only reliable way to tell a chat
+            # panel from inline ghost text, and the reviewer is shown which it
+            # was. Skipping OCR on confident detections would be faster but
+            # would leave exactly the panel cases unlabelled.
+            copilot = CopilotDetector(ocr_cache=self.ocr_cache,
+                                      ml_scorer=ml_scorer,
+                                      skip_ocr_when_confident=False)
         brightspace = BrightspaceDetector(self.ocr_cache) if use_brightspace else None
 
         def _ocr_progress(done, total):
@@ -252,20 +316,28 @@ class App(tk.Tk):
                     ml_scores = {p: raw.get(str(p)) for p in paths}
                 except Exception as e:
                     self._queue.put(("model_status", f"scoring failed ({e})"))
-            needs_ocr = [p for p in paths if not ml_is_confident(ml_scores.get(p))]
-            self.ocr_cache.extract_many(needs_ocr, progress=_ocr_progress)
+            self.ocr_cache.extract_many(paths, progress=_ocr_progress)
         if brightspace:
             brightspace.prefetch(paths, progress=None if copilot else _ocr_progress)
 
         results = []
         for i, p in enumerate(paths):
             r = {"path": p, "score": 0.0, "copilot_score": None,
+                 "assistant_kind": None, "left_vscode": 0.0,
                  "bs_score": None, "bs_verdict": None, "bs_sites": "",
-                 "status": ""}
+                 "status": "", "box": None}
             if copilot:
                 ev = copilot.detect(p, ml_score=ml_scores.get(p))
                 r["copilot_score"] = ev.score
+                r["assistant_kind"] = self._assistant_kind(ev)
                 r["score"] = max(r["score"], ev.score)
+                r["left_vscode"] = self._left_vscode(
+                    ev.is_ide, ev.ocr_ran, combined=use_brightspace)
+                r["score"] = max(r["score"], r["left_vscode"])
+                # tiled inference reports which tile fired, so the reviewer can
+                # be shown where to look instead of scanning the whole capture
+                if hasattr(copilot.ml_scorer, "box_for"):
+                    r["box"] = copilot.ml_scorer.box_for(p)
             if brightspace:
                 ev = brightspace.detect(p)
                 r["bs_score"] = self._brightspace_contribution(
@@ -291,10 +363,39 @@ class App(tk.Tk):
         return score
 
     @staticmethod
+    def _assistant_kind(ev):
+        """Which of the two ways an assistant shows up did we see?
+
+        The model is a single binary classifier and cannot say. The keywords
+        can: they only appear in an assistant's own interface, so a match means
+        a panel is open. A detection with no keywords anywhere on screen is
+        the inline case - ghost text carries no identifying text at all."""
+        if ev.strong_matches or ev.weak_matches:
+            tool = ev.detected_tool if ev.detected_tool != "unknown" else ""
+            return f"chat panel{f' ({tool})' if tool else ''}"
+        if not ev.ocr_ran:
+            return None            # cannot tell without the text
+        return "inline ghost text"
+
+    @staticmethod
+    def _left_vscode(is_ide, ocr_ran, combined):
+        """During a VS Code exam every capture should show the editor, so one
+        that does not is a window-leave. Suppressed in combined mode, where
+        the student is also expected to be in Brightspace, and when OCR did
+        not run - absence of text is not evidence of absence of an editor."""
+        if combined or not ocr_ran or is_ide:
+            return 0.0
+        return 0.95
+
+    @staticmethod
     def _detail_text(r, threshold):
         bits = []
+        if r.get("left_vscode", 0.0) >= threshold:
+            bits.append("LEFT VS CODE: screenshot is not the editor")
         if r["copilot_score"] is not None and r["copilot_score"] >= threshold:
-            bits.append("CHEATING DETECTED:")
+            kind = r.get("assistant_kind")
+            bits.append(f"CHEATING DETECTED: {kind}" if kind
+                        else "CHEATING DETECTED: AI assistant")
         if r["bs_score"] is not None and r["bs_score"] >= threshold:
             sites = r["bs_sites"] or "unrecognized page"
             bits.append(f"Brightspace: {r['bs_verdict']} ({sites})")
@@ -378,40 +479,33 @@ class App(tk.Tk):
 
         nav = tk.Frame(controls, bg=BG)
         nav.pack(side="left")
-        prev_b = tk.Button(nav, text="←  Prev", command=lambda: self._step(-1))
-        flat(prev_b, CARD, INK, "#f1f5f9", padx=20, pady=9)
-        prev_b.config(highlightbackground=BORDER, highlightthickness=1)
-        prev_b.pack(side="left", padx=(0, 6))
-        next_b = tk.Button(nav, text="Next  →", command=lambda: self._step(1))
-        flat(next_b, RED, "#ffffff", RED_DARK, font=(FONT, 13, "bold"),
-             padx=20, pady=9)
-        next_b.pack(side="left")
+        Button(nav, "←  Prev", command=lambda: self._step(-1),
+               bg=CARD, fg=INK, hover="#f1f5f9", border=BORDER,
+               padx=22).pack(side="left", padx=(0, 8))
+        Button(nav, "Next  →", command=lambda: self._step(1),
+               bg=RED, fg="#ffffff", hover=RED_DARK, border=RED,
+               font=(FONT, 13, "bold"), padx=22).pack(side="left")
 
         triage = tk.Frame(controls, bg=BG)
-        triage.pack(side="left", padx=28)
-        rev_b = tk.Button(triage, text="Mark reviewed",
-                          command=lambda: self._set_status("reviewed"))
-        flat(rev_b, CARD, INK, GREEN_TINT, font=SMALL, padx=14, pady=9)
-        rev_b.config(highlightbackground=BORDER, highlightthickness=1)
-        rev_b.pack(side="left", padx=3)
-        dis_b = tk.Button(triage, text="Dismiss",
-                          command=lambda: self._set_status("dismissed"))
-        flat(dis_b, CARD, INK, RED_TINT, font=SMALL, padx=14, pady=9)
-        dis_b.config(highlightbackground=BORDER, highlightthickness=1)
-        dis_b.pack(side="left", padx=3)
-        clr_b = tk.Button(triage, text="Clear",
-                          command=lambda: self._set_status(""))
-        flat(clr_b, BG, FAINT, "#f1f5f9", font=SMALL, padx=10, pady=9)
-        clr_b.pack(side="left", padx=3)
+        triage.pack(side="left", padx=30)
+        Button(triage, "✓  Reviewed", command=lambda: self._set_status("reviewed"),
+               bg=CARD, fg=INK, hover=GREEN_TINT, border=BORDER,
+               font=SMALL, padx=16).pack(side="left", padx=4)
+        Button(triage, "✕  Dismiss", command=lambda: self._set_status("dismissed"),
+               bg=CARD, fg=INK, hover=RED_TINT, border=BORDER,
+               font=SMALL, padx=16).pack(side="left", padx=4)
+        Button(triage, "Clear", command=lambda: self._set_status(""),
+               bg=BG, fg=FAINT, hover="#eef2f6", border=BG,
+               font=SMALL, padx=12).pack(side="left", padx=4)
 
         actions = tk.Frame(controls, bg=BG)
         actions.pack(side="right")
-        exp_b = tk.Button(actions, text="Export report", command=self._export)
-        flat(exp_b, BLACK, "#ffffff", "#2d2d2d", padx=18, pady=9)
-        exp_b.pack(side="left", padx=(0, 10))
-        over_b = tk.Button(actions, text="Start over", command=self._go_home)
-        flat(over_b, BG, FAINT, "#f1f5f9", font=SMALL, padx=12, pady=9)
-        over_b.pack(side="left")
+        Button(actions, "Export report", command=self._export,
+               bg=BLACK, fg="#ffffff", hover="#2d2d2d", border=BLACK,
+               padx=20).pack(side="left", padx=(0, 10))
+        Button(actions, "Start over", command=self._go_home,
+               bg=BG, fg=FAINT, hover="#eef2f6", border=BG,
+               font=SMALL, padx=14).pack(side="left")
 
         # keyboard: arrows to navigate, r/d/c to triage, e to export
         self.bind("<Left>", lambda e: self._step(-1))
@@ -466,11 +560,20 @@ class App(tk.Tk):
         if not self.results:
             return
         r = self.results[self.result_idx]
-        img = Image.open(r["path"])
+        img = Image.open(r["path"]).convert("RGB")
+        full_w, full_h = img.size
         # fit to the live stage size; LANCZOS keeps small UI text legible
         sw = max(self._stage.winfo_width() - 24, 200)
         sh = max(self._stage.winfo_height() - 24, 200)
         img.thumbnail((min(sw, VIEW_W * 2), min(sh, VIEW_H * 2)), Image.LANCZOS)
+
+        if r.get("box") and r["score"] >= self.threshold:
+            scale = img.size[0] / full_w
+            x0, y0, x1, y1 = (int(v * scale) for v in r["box"])
+            d = ImageDraw.Draw(img)
+            for w in range(3):
+                d.rectangle([x0 - w, y0 - w, x1 + w, y1 + w], outline=RED)
+
         self._photo = ImageTk.PhotoImage(img)
         self.canvas.config(image=self._photo)
 
@@ -506,7 +609,8 @@ class App(tk.Tk):
         with open(out / "report.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["file", "score", "flagged", "status",
-                        "assistant_score", "brightspace_score",
+                        "assistant_score", "assistant_kind", "left_vscode",
+                        "brightspace_score",
                         "brightspace_verdict", "off_task_sites", "evidence"])
             for r in self.all_results:
                 w.writerow([
@@ -514,6 +618,8 @@ class App(tk.Tk):
                     "yes" if r["score"] >= self.threshold else "no",
                     r["status"],
                     "" if r["copilot_score"] is None else f"{r['copilot_score']:.2f}",
+                    r.get("assistant_kind") or "",
+                    "yes" if r.get("left_vscode", 0.0) >= self.threshold else "",
                     "" if r["bs_score"] is None else f"{r['bs_score']:.2f}",
                     r["bs_verdict"] or "", r["bs_sites"],
                     self._detail_text(r, self.threshold),

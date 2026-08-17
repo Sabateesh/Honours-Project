@@ -16,7 +16,14 @@ def test_plan_balances_positive_variants():
     assert len(pos) == 100 and len(neg) == 100
     # every way an assistant shows up is represented
     assert set(pos) == {"ghost", "panel", "both"}
-    assert pos.count("panel") >= 20 and pos.count("ghost") >= 20
+    assert pos.count("panel") >= 15 and pos.count("ghost") >= 20
+
+
+def test_plan_favours_ghost_over_panel():
+    # panels are already detected perfectly; ghost text is where the errors are
+    jobs = _plan(100, 100, hard_neg_frac=0.5, rng=random.Random(0))
+    pos = [v for lab, v in jobs if lab == "copilot_active"]
+    assert pos.count("ghost") > pos.count("panel")
 
 
 def test_plan_hard_negative_fraction():
@@ -36,8 +43,30 @@ def test_every_variant_renders():
     rng = random.Random(3)
     corpus = _corpus()
     for variant in ["ghost", "panel", "both", "clean", "hardneg"]:
-        img = make_sample(corpus, rng, variant)
+        img, _ = make_sample(corpus, rng, variant)
         assert img.size[0] > 0 and img.size[1] > 0
+
+
+def test_positive_variants_report_signal_regions():
+    rng = random.Random(4)
+    corpus = _corpus()
+    for variant, kinds in [("ghost", {"ghost"}), ("panel", {"panel"}),
+                           ("both", {"ghost", "panel"})]:
+        img, boxes = make_sample(corpus, rng, variant)
+        assert {b["kind"] for b in boxes} == kinds, variant
+        for b in boxes:
+            x0, y0, x1, y1 = b["box"]
+            assert x1 > x0 and y1 > y0
+            assert 0 <= x0 and x1 <= img.size[0]
+            assert 0 <= y0 and y1 <= img.size[1]
+
+
+def test_negative_variants_report_no_regions():
+    rng = random.Random(5)
+    corpus = _corpus()
+    for variant in ["clean", "hardneg"]:
+        _, boxes = make_sample(corpus, rng, variant)
+        assert boxes == []
 
 
 def test_neg_panels_are_not_chat():

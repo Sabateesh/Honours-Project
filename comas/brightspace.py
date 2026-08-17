@@ -73,19 +73,9 @@ def score_markers(on: list[str], off: list[str]) -> tuple[float, str]:
     return 0.95, "left_quiz"
 
 
-# VS Code chrome that OCR reads reliably. Used in combined mode: a capture
-# that is clearly the IDE is the student doing their exam, not a tab-leave.
-IDE_KEYWORDS = [
-    "explorer", "debug console", "problems", "output", "terminal",
-    "spaces: 4", "utf-8", ".py", "outline", "timeline",
-]
-
-
-def looks_like_ide(text: str) -> bool:
-    if not text:
-        return False
-    low = text.lower()
-    return sum(1 for k in IDE_KEYWORDS if k in low) >= 2
+# IDE recognition lives with the VS Code detector; imported here because
+# combined mode needs it to tell a legitimate coding capture from a tab-leave.
+from .copilot import IDE_KEYWORDS, looks_like_ide  # noqa: E402,F401
 
 
 # Tab titles and the URL bar sit in the top strip, so an on-quiz capture can

@@ -7,6 +7,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .synthetic import _LogicalFont, _ScaledDraw
+
 log = logging.getLogger(__name__)
 
 RESOLUTIONS = [(1280, 800), (1440, 900), (1680, 1050), (1920, 1080)]
@@ -81,11 +83,18 @@ WIKI_ARTICLES = [
 ]
 
 
+# Pixel density for the whole module. Browser negatives must be rendered at the
+# same scale as the IDE images they are mixed with, otherwise resolution itself
+# becomes a shortcut the model can use to separate the classes.
+_SCALE = 1
+
+
 def _font(size, bold=False):
     names = ["DejaVuSans-Bold.ttf"] if bold else ["DejaVuSans.ttf", "Arial.ttf"]
     for name in names:
         try:
-            return ImageFont.truetype(name, size=size)
+            f = ImageFont.truetype(name, size=size * _SCALE)
+            return _LogicalFont(f, _SCALE) if _SCALE != 1 else f
         except (OSError, IOError):
             continue
     return ImageFont.load_default()
@@ -240,8 +249,11 @@ QUIZ_URL = "brightspace.carleton.ca/d2l/lms/quizzing/user/attempt/quiz_start_fra
 
 def generate_screenshot(on_quiz: bool, rng: random.Random) -> Image.Image:
     w, h = rng.choice(RESOLUTIONS)
-    img = Image.new("RGB", (w, h), (255, 255, 255))
+    # layout below is in 1x units; the canvas may be denser
+    img = Image.new("RGB", (w * _SCALE, h * _SCALE), (255, 255, 255))
     draw = ImageDraw.Draw(img)
+    if _SCALE != 1:
+        draw = _ScaledDraw(draw, _SCALE)
 
     if on_quiz:
         extra = rng.sample(["Gmail", "Carleton Central", "Calendar"],
@@ -262,7 +274,10 @@ def generate_screenshot(on_quiz: bool, rng: random.Random) -> Image.Image:
     return img
 
 
-def generate(out_dir: Path, n_on: int, n_off: int, seed: int = 0) -> None:
+def generate(out_dir: Path, n_on: int, n_off: int, seed: int = 0,
+             scale: int = 1) -> None:
+    global _SCALE
+    _SCALE = scale
     rng = random.Random(seed)
     on_dir = out_dir / "on_quiz"
     off_dir = out_dir / "left_quiz"
@@ -289,10 +304,13 @@ def main():
     ap.add_argument("--n-on", type=int, default=200)
     ap.add_argument("--n-off", type=int, default=200)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--scale", type=int, default=1,
+                    help="pixel density; must match the IDE dataset it will "
+                         "be mixed with")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO)
-    generate(args.out, args.n_on, args.n_off, args.seed)
+    generate(args.out, args.n_on, args.n_off, args.seed, args.scale)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,23 @@ python3 -m comas.synthetic_brightspace --out data_brightspace
 cp data_brightspace/on_quiz/*.png data_brightspace/left_quiz/*.png data_vscode/no_copilot/
 ```
 
+### Tiled model (better ghost-text detection)
+
+Whole-image scoring resizes a screenshot down to the network input, which
+crushes ghost text to a few pixels. Tiling scores native-resolution crops
+instead and takes the maximum, and reports which tile fired so the GUI can
+highlight it.
+
+```
+python3 -m comas.tiling --src data_vscode --out data_tiles
+python3 -m comas.train --config config_tiles.yaml
+python3 -m comas.variant_report --data data_vscode_holdout \
+    --config config_tiles.yaml --split all --threshold 0.20
+```
+
+`config_tiles.yaml` sets `tile.enabled: true`, so the GUI picks up tiled
+inference automatically once that checkpoint exists.
+
 After training, break the headline number down by failure mode:
 
 ```

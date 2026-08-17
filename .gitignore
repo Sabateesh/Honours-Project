@@ -9,6 +9,8 @@ data/
 data_vscode/
 data_vscode_holdout/
 data_brightspace/
+data_brightspace_2x/
+data_tiles/
 data_holdout/
 all_shots/
 checkpoints/

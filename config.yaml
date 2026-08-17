@@ -15,14 +15,15 @@ model:
   dropout: 0.3
 
 train:
-  epochs: 10
+  # both previous runs peaked at epoch 5 of 10 and overfit after
+  epochs: 7
   lr: 1.0e-4
   weight_decay: 1.0e-4
   pos_weight_auto: true
   pos_weight_override: null
 
 paths:
-  checkpoint: checkpoints/vscode_768.pt
+  checkpoint: checkpoints/vscode_768_v3.pt
   ocr_cache: cache/ocr.json
 
 logging:

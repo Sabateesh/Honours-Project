@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import random
 import re
@@ -119,6 +120,15 @@ COMPOSER_HINTS = ["Ask anything", "Send a message", "Type a question",
 
 NEG_PANELS = ["outline", "extensions", "scm", "search"]
 
+# VS Code inlay hints: greyed type annotations rendered inline, in the same
+# dim colour as ghost text. They are the single most confusable legitimate
+# feature, and real screenshots are full of them. Drawn into BOTH classes on
+# purpose - if they only appeared in negatives the model would learn "grey
+# annotation means innocent" and be wrong the moment a student has hints on
+# while an assistant is suggesting.
+INLAY_HINTS = [": str", ": int", ": bool", ": float", " -> None",
+               ": list[str]", ": dict", " -> bool", ": Path", ": Optional[int]"]
+
 OUTLINE_ROWS = ["main", "load_corpus", "tokenize_line", "render", "Config",
                 "__init__", "run", "parse_args", "Detector", "detect", "flush"]
 EXT_ROWS = [("Python", "IntelliSense, linting, debugging"),
@@ -141,10 +151,73 @@ TOKEN_RE = re.compile(
 )
 
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont:
+class _LogicalFont:
+    """A font rendered at `scale`x but *measured* in 1x units.
+
+    Layout code positions things using font.getlength(). If the font were
+    simply loaded larger, those measurements would come back scaled while the
+    surrounding constants stayed at 1x, and the layout would fall apart.
+    Reporting logical lengths keeps every existing layout expression correct at
+    any scale."""
+
+    def __init__(self, font, scale):
+        self.font = font
+        self.scale = scale
+
+    def getlength(self, text):
+        return self.font.getlength(text) / self.scale
+
+    def getbbox(self, *a, **kw):
+        return tuple(v / self.scale for v in self.font.getbbox(*a, **kw))
+
+
+class _ScaledDraw:
+    """Wraps ImageDraw so the generator can keep drawing in 1x coordinates
+    while the canvas underneath is `scale`x larger.
+
+    This is what a Retina capture actually is: identical layout, text rendered
+    at twice the pixel density. Upscaling a 1x render afterwards would not do -
+    that produces blurry text, and the thing being detected is a subtle
+    difference in text colour."""
+
+    def __init__(self, draw, scale):
+        self._d = draw
+        self.s = scale
+
+    def _xy(self, xy):
+        s = self.s
+        if xy and isinstance(xy[0], (list, tuple)):
+            return [tuple(v * s for v in pt) for pt in xy]
+        return [v * s for v in xy]
+
+    def _kw(self, kw):
+        f = kw.get("font")
+        if isinstance(f, _LogicalFont):
+            kw = dict(kw, font=f.font)
+        return kw
+
+    def rectangle(self, xy, **kw):
+        self._d.rectangle(self._xy(xy), **self._kw(kw))
+
+    def rounded_rectangle(self, xy, radius=0, **kw):
+        self._d.rounded_rectangle(self._xy(xy), radius=radius * self.s,
+                                  **self._kw(kw))
+
+    def ellipse(self, xy, **kw):
+        self._d.ellipse(self._xy(xy), **self._kw(kw))
+
+    def line(self, xy, **kw):
+        self._d.line(self._xy(xy), **self._kw(kw))
+
+    def text(self, xy, txt, **kw):
+        self._d.text(tuple(v * self.s for v in xy), txt, **self._kw(kw))
+
+
+def _load_font(size: int, scale: int = 1):
     for path in FONT_CANDIDATES:
         if Path(path).exists():
-            return ImageFont.truetype(path, size)
+            f = ImageFont.truetype(path, size * scale)
+            return _LogicalFont(f, scale) if scale != 1 else f
     return ImageFont.load_default()
 
 
@@ -371,15 +444,19 @@ def _draw_code_line(draw, x, y, tokens, theme, font, ghost=False):
 
 
 def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
-                      theme, rng, filenames, panel=None) -> Image.Image:
+                      theme, rng, filenames, panel=None, scale: int = 1,
+                      inlay: bool = False):
     W, H = rng.choice(WINDOW_SIZES)
     font_size = rng.randint(12, 15)
-    font = _load_font(font_size)
-    font_ui = _load_font(12)
+    font = _load_font(font_size, scale)
+    font_ui = _load_font(12, scale)
     line_h = font_size + 7
 
-    img = Image.new("RGB", (W, H), theme["bg"])
+    # Layout below is written in 1x units; the canvas is scale x larger.
+    img = Image.new("RGB", (W * scale, H * scale), theme["bg"])
     draw = ImageDraw.Draw(img)
+    if scale != 1:
+        draw = _ScaledDraw(draw, scale)
     sidebar_w, top, bottom = _draw_chrome(draw, W, H, theme, rng,
                                           filenames, file_name, font_ui)
 
@@ -397,6 +474,7 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
     row = 0
     idx = start
     cursor_x = None
+    boxes = []
     while row < n_visible and idx < len(lines):
         ghost_here = ghost_lines and idx == cursor_line
         lineno = str(idx + 1)
@@ -413,18 +491,33 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
             prefix, first_ghost = ghost_lines[0]
             x_end = _draw_code_line(draw, code_x, y, tokenize_line(prefix), theme, font)
             cursor_x = x_end
-            _draw_code_line(draw, x_end, y, [(first_ghost, "default")],
-                            theme, font, ghost=True)
+            gx1 = _draw_code_line(draw, x_end, y, [(first_ghost, "default")],
+                                  theme, font, ghost=True)
+            # remember exactly where the dim text landed, so tiles covering it
+            # can be labelled without guessing
+            ghost_box = [x_end, y, gx1, y + line_h]
             for cont in ghost_lines[1:]:
                 row += 1
                 y += line_h
                 if row >= n_visible:
                     break
-                _draw_code_line(draw, code_x, y, [(cont, "default")],
-                                theme, font, ghost=True)
+                cx1 = _draw_code_line(draw, code_x, y, [(cont, "default")],
+                                      theme, font, ghost=True)
+                ghost_box[0] = min(ghost_box[0], code_x)
+                ghost_box[2] = max(ghost_box[2], cx1)
+                ghost_box[3] = y + line_h
+            boxes.append({"kind": "ghost",
+                          "box": [int(v) for v in ghost_box]})
         else:
             x_end = _draw_code_line(draw, code_x, y, tokenize_line(lines[idx]),
                                     theme, font)
+            # an inlay hint sits right where a suggestion would, in the same
+            # dim colour - including on the cursor line, which is the hardest
+            # case for the model to tell apart
+            if inlay and lines[idx].strip() and rng.random() < 0.30:
+                _draw_code_line(draw, x_end, y,
+                                [(rng.choice(INLAY_HINTS), "default")],
+                                theme, font, ghost=True)
             if is_cursor:
                 cursor_x = x_end
 
@@ -449,12 +542,19 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
 
     if panel == "chat":
         _draw_chat_panel(draw, panel_x, top, bottom, W, theme, rng, font_ui)
+        boxes.append({"kind": "panel",
+                      "box": [int(panel_x), int(top), int(W), int(bottom)]})
     elif panel:
         _draw_neg_panel(draw, panel, panel_x, top, bottom, W, theme, rng, font_ui)
-    return img
+
+    # regions were recorded in layout units; report them in image pixels
+    if scale != 1:
+        for b in boxes:
+            b["box"] = [int(v * scale) for v in b["box"]]
+    return img, boxes
 
 
-def make_sample(corpus, rng, variant: str):
+def make_sample(corpus, rng, variant: str, scale: int = 1):
     """variant: ghost | panel | both | clean | hardneg"""
     file_name, lines = rng.choice(corpus)
     filenames = [name for name, _ in corpus]
@@ -471,6 +571,18 @@ def make_sample(corpus, rng, variant: str):
     else:
         panel = None
 
+    # Park the cursor on a comment for some clean negatives. A comment is dim
+    # text sitting exactly where a suggestion would appear, so this forces the
+    # model to read the text rather than just spotting grey pixels at the caret.
+    if variant == "clean" and rng.random() < 0.40:
+        comments = [i for i in range(start, min(start + 30, len(lines) - 1))
+                    if lines[i].strip().startswith("#")]
+        if comments:
+            cursor_line = rng.choice(comments)
+
+    # Inlay hints appear in every class, so their presence carries no signal.
+    inlay = rng.random() < 0.45
+
     ghost = []
     if with_ghost:
         full = lines[cursor_line]
@@ -485,16 +597,27 @@ def make_sample(corpus, rng, variant: str):
             for extra in other[at:at + n_more]:
                 ghost.append(indent + extra.strip() if extra.strip() else " ")
     return render_screenshot(file_name, lines, start, cursor_line, ghost,
-                             theme, rng, filenames, panel=panel)
+                             theme, rng, filenames, panel=panel, scale=scale,
+                             inlay=inlay)
+
+
+def make_image(corpus, rng, variant: str, scale: int = 1):
+    """Convenience wrapper for callers that only want the rendered image."""
+    img, _ = make_sample(corpus, rng, variant, scale)
+    return img
 
 
 def _plan(n_active: int, n_clean: int, hard_neg_frac: float, rng):
     """Positives split across the two ways an assistant shows up; a chunk of the
-    negatives carry a non-chat panel so position alone is not a giveaway."""
+    negatives carry a non-chat panel so position alone is not a giveaway.
+
+    Weighted towards ghost text: panels are already detected perfectly, so
+    extra panel examples buy nothing, while ghost text is where every
+    remaining error lives."""
     jobs = []
     for i in range(n_active):
         r = i / max(1, n_active)
-        variant = "ghost" if r < 0.40 else ("panel" if r < 0.80 else "both")
+        variant = "ghost" if r < 0.60 else ("panel" if r < 0.80 else "both")
         jobs.append(("copilot_active", variant))
     n_hard = int(n_clean * hard_neg_frac)
     jobs += [("no_copilot", "hardneg")] * n_hard
@@ -504,7 +627,8 @@ def _plan(n_active: int, n_clean: int, hard_neg_frac: float, rng):
 
 
 def generate(out_dir: Path, n_active: int, n_clean: int, sessions: int,
-             seed: int, corpus_roots: list[Path], hard_neg_frac: float = 0.5):
+             seed: int, corpus_roots: list[Path], hard_neg_frac: float = 0.5,
+             scale: int = 1):
     rng = random.Random(seed)
     corpus = load_corpus(corpus_roots)
     log.info("Corpus: %d files", len(corpus))
@@ -513,21 +637,34 @@ def generate(out_dir: Path, n_active: int, n_clean: int, sessions: int,
 
     counters: dict[str, int] = {}
     tally: dict[str, int] = {}
+    labels: dict[str, dict] = {}
     for i, (label, variant) in enumerate(jobs):
         session = f"synth{i % sessions:02d}"
         counters[label] = counters.get(label, 0) + 1
         tally[variant] = tally.get(variant, 0) + 1
         folder = out_dir / label
         folder.mkdir(parents=True, exist_ok=True)
-        img = make_sample(corpus, rng, variant)
+        img, boxes = make_sample(corpus, rng, variant, scale)
         # variant in the filename so recall can be reported per failure mode;
         # the session token stays first, which is all the splitter looks at
-        img.save(folder / f"{session}_{variant}_{counters[label]:04d}.png")
+        name = f"{session}_{variant}_{counters[label]:04d}.png"
+        img.save(folder / name)
+        labels[f"{label}/{name}"] = {
+            "variant": variant,
+            "label": 1 if label == "copilot_active" else 0,
+            "size": list(img.size),
+            "regions": boxes,
+        }
         if (i + 1) % 50 == 0:
             log.info("%d / %d", i + 1, len(jobs))
 
+    # Exact pixel locations of every signal, for tiled training (comas.tiling).
+    (out_dir / "labels.json").write_text(json.dumps(labels, indent=1))
+
     log.info("Done: %d active / %d clean under %s", n_active, n_clean, out_dir)
     log.info("Variants: %s", ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
+    log.info("Wrote region labels for %d images to %s",
+             len(labels), out_dir / "labels.json")
 
 
 def main():
@@ -541,13 +678,16 @@ def main():
                     default=[Path("comas"), Path("tests")])
     ap.add_argument("--hard-neg-frac", type=float, default=0.5,
                     help="share of negatives that show a non-chat side panel")
+    ap.add_argument("--scale", type=int, default=1,
+                    help="pixel density: 2 renders Retina-scale captures "
+                         "(~2560x1600 to 3360x2100) matching real screenshots")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s: %(message)s",
                         datefmt="%H:%M:%S")
     generate(args.out, args.n_active, args.n_clean, args.sessions,
-             args.seed, args.corpus, args.hard_neg_frac)
+             args.seed, args.corpus, args.hard_neg_frac, args.scale)
 
 
 if __name__ == "__main__":

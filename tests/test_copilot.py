@@ -125,6 +125,40 @@ def test_score_batch_survives_unreadable_file(tmp_path):
     assert out[str(bad)] == 0.0  # scored safe-low, not crashed
 
 
+def test_model_score_discarded_when_not_an_editor():
+    """The model has never seen a browser or a desktop, so its opinion there
+    is meaningless. Without this gate a stray high score would be reported to
+    a proctor as 'AI coding assistant detected' on a browser window."""
+    cache = _CountingCache("Gmail - Inbox (24)")   # no IDE chrome
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97,
+                          skip_ocr_when_confident=False)
+    ev = det.detect(Path("x.png"))
+    assert ev.is_ide is False
+    assert ev.ml_gated is True
+    assert ev.score == 0.0          # model ignored
+    assert ev.ml_score == 0.97      # but still recorded for transparency
+
+
+def test_keywords_survive_the_gate():
+    # reading the assistant's own name is evidence wherever it appears
+    cache = _CountingCache("github.com/copilot - Gmail")
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97,
+                          skip_ocr_when_confident=False)
+    ev = det.detect(Path("x.png"))
+    assert ev.is_ide is False
+    assert ev.score > 0.0
+
+
+def test_model_score_kept_inside_an_editor():
+    cache = _CountingCache("EXPLORER  data.py  TERMINAL  UTF-8  Spaces: 4")
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97,
+                          skip_ocr_when_confident=False)
+    ev = det.detect(Path("x.png"))
+    assert ev.is_ide is True
+    assert ev.ml_gated is False
+    assert ev.score == 0.97
+
+
 def test_ml_is_confident_bounds():
     assert ml_is_confident(0.90)
     assert ml_is_confident(0.99)

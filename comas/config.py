@@ -7,6 +7,33 @@ import yaml
 
 
 @dataclass
+class AugmentConfig:
+    """Train-time degradations that narrow the synthetic-to-real gap. These
+    fight against the ghost-text signal, which is only a pixel or two of dim
+    text, so the defaults are deliberately mild."""
+    downscale_p: float = 0.5
+    downscale_min: float = 0.75
+    downscale_max: float = 0.95
+    jpeg_p: float = 0.25
+    jpeg_qmin: int = 65
+    jpeg_qmax: int = 95
+    blur_p: float = 0.15
+    blur_min: float = 0.3
+    blur_max: float = 0.6
+
+
+@dataclass
+class TileConfig:
+    """Tiled inference. Tiles are square, sized as a fraction of image height
+    so a tile covers the same amount of interface regardless of whether the
+    screenshot came from a 1440px laptop or a 3600px Retina capture."""
+    enabled: bool = False
+    tile_frac: float = 0.34
+    overlap: float = 0.35
+    min_px: int = 256
+
+
+@dataclass
 class DataConfig:
     root: Path = Path("data/")
     img_size: int = 384
@@ -51,6 +78,8 @@ class LoggingConfig:
 @dataclass
 class Config:
     data: DataConfig = field(default_factory=DataConfig)
+    augment: AugmentConfig = field(default_factory=AugmentConfig)
+    tile: TileConfig = field(default_factory=TileConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
@@ -73,6 +102,8 @@ def load_config(path: Optional[Path] = None) -> Config:
     raw = _coerce_paths(raw)
     return Config(
         data=DataConfig(**raw.get("data", {})),
+        augment=AugmentConfig(**raw.get("augment", {})),
+        tile=TileConfig(**raw.get("tile", {})),
         model=ModelConfig(**raw.get("model", {})),
         train=TrainConfig(**raw.get("train", {})),
         paths=PathsConfig(**raw.get("paths", {})),

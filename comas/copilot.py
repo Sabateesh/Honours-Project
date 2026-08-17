@@ -42,6 +42,20 @@ WEAK_KEYWORDS: dict[str, str] = {
     "ghost text": "copilot",
 }
 
+# VS Code chrome that OCR reads reliably. Two matches are required so a quiz
+# question mentioning a .py file does not register as an editor.
+IDE_KEYWORDS = [
+    "explorer", "debug console", "problems", "output", "terminal",
+    "spaces: 4", "utf-8", ".py", "outline", "timeline",
+]
+
+
+def looks_like_ide(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    return sum(1 for k in IDE_KEYWORDS if k in low) >= 2
+
 
 @dataclass
 class CopilotEvidence:
@@ -55,6 +69,9 @@ class CopilotEvidence:
     template_confidence: Optional[float] = None
     template_box: Optional[tuple[int, int, int, int]] = None
     ml_score: Optional[float] = None
+    ocr_ran: bool = False
+    is_ide: bool = False
+    ml_gated: bool = False
     ocr_snippet: Optional[str] = None
     
 
@@ -175,13 +192,14 @@ class CopilotDetector:
     def __init__(self, ocr_cache=None, templates_dir=None, ml_scorer=None,
                  template_threshold=0.78,
                  template_scales=(0.5, 0.75, 1.0, 1.25, 1.5, 2.0),
-                 skip_ocr_when_confident=True):
+                 skip_ocr_when_confident=True, gate_ml_on_ide=True):
         self.ocr_cache = ocr_cache
         self.templates_dir = templates_dir
         self.ml_scorer = ml_scorer
         self.template_threshold = template_threshold
         self.template_scales = template_scales
         self.skip_ocr_when_confident = skip_ocr_when_confident
+        self.gate_ml_on_ide = gate_ml_on_ide
 
     def detect(self, image_path: Path,
                ml_score: Optional[float] = None) -> CopilotEvidence:
@@ -199,7 +217,9 @@ class CopilotDetector:
 
         skip_ocr = self.skip_ocr_when_confident and ml_is_confident(ml_score)
         if self.ocr_cache is not None and not skip_ocr:
+            ev.ocr_ran = True
             text = self.ocr_cache.get_or_extract(image_path)
+            ev.is_ide = looks_like_ide(text)
             strong, weak = find_keywords(text)
             ocr_score, ocr_method = score_from_keywords(strong, weak)
             ev.strong_matches = strong
@@ -219,6 +239,18 @@ class CopilotDetector:
                 ev.template_box = tpl["best_match"]["box"]
             if tpl["score"] > ev.score:
                 ev.score, ev.method = tpl["score"], "template"
+
+        # An AI coding assistant lives inside a code editor. If the capture is
+        # not an editor, the model is being asked about something it was never
+        # trained on and its answer is not meaningful - so it is discarded and
+        # the screenshot is judged on text alone. Keyword matches survive:
+        # reading "GitHub Copilot" on screen is direct evidence wherever it
+        # appears. This is what makes browser training negatives unnecessary.
+        if self.gate_ml_on_ide and ev.ocr_ran and not ev.is_ide:
+            ocr_score, ocr_method = score_from_keywords(ev.strong_matches,
+                                                        ev.weak_matches)
+            ev.score, ev.method = ocr_score, ocr_method
+            ev.ml_gated = True
 
         return ev
 
@@ -271,6 +303,23 @@ class MLScorer:
 
     def __call__(self, path: Path) -> float:
         return self.score_batch([path])[str(path)]
+
+    def score_images(self, images) -> list[float]:
+        """Score already-loaded PIL images. Used by tiled inference, where the
+        crops exist in memory and never touch disk."""
+        torch = self._torch
+        out: list[float] = []
+        with torch.no_grad():
+            for i in range(0, len(images), self.BATCH):
+                chunk = images[i:i + self.BATCH]
+                x = torch.stack([self._tfms(im) for im in chunk]).to(self._device)
+                if self._text_encoder is not None:
+                    t = self._text_encoder.encode([""] * len(chunk)).to(self._device)
+                else:
+                    t = torch.zeros(len(chunk), 0, device=self._device)
+                probs = torch.sigmoid(self._model(x, t)).cpu()
+                out.extend(float(v) for v in probs)
+        return out
 
     def score_batch(self, paths, progress=None) -> dict[str, float]:
         from PIL import Image
@@ -341,8 +390,19 @@ def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[MLScorer]:
         if cfg.model.use_ocr else None
     ocr_cache = OCRCache(cfg.paths.ocr_cache) if cfg.model.use_ocr else None
 
-    return MLScorer(model, eval_tfms, device, torch,
-                    text_encoder=text_encoder, ocr_cache=ocr_cache)
+    scorer = MLScorer(model, eval_tfms, device, torch,
+                      text_encoder=text_encoder, ocr_cache=ocr_cache)
+
+    # A tile-trained checkpoint is applied tile-by-tile at native resolution
+    # instead of resizing the whole screenshot down to the input size.
+    tile_cfg = getattr(cfg, "tile", None)
+    if tile_cfg is not None and tile_cfg.enabled:
+        from .tiling import TiledScorer
+        log.info("Tiled inference enabled (tile_frac=%.2f, overlap=%.2f).",
+                 tile_cfg.tile_frac, tile_cfg.overlap)
+        return TiledScorer(scorer, tile_frac=tile_cfg.tile_frac,
+                           overlap=tile_cfg.overlap, min_px=tile_cfg.min_px)
+    return scorer
 
 
 def main():
