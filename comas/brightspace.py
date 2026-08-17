@@ -64,10 +64,9 @@ def find_markers(text: str) -> tuple[list[str], list[str]]:
 
 
 def score_markers(on: list[str], off: list[str]) -> tuple[float, str]:
-    # The quiz markers are the whole verdict: during a Brightspace exam the
-    # quiz should be on screen, so any capture without it is a tab-leave.
-    # Off-task keywords no longer drive the score - they only name the site
-    # in the evidence line ("left_quiz (stackoverflow)") when recognized.
+    # The quiz should be on screen during the exam, so any capture without it
+    # is a tab-leave. Off-task keywords only name the site in the evidence
+    # line; they do not drive the score.
     if on:
         return 0.05, "on_quiz"
     return 0.95, "left_quiz"
@@ -78,9 +77,8 @@ def score_markers(on: list[str], off: list[str]) -> tuple[float, str]:
 from .copilot import IDE_KEYWORDS, looks_like_ide  # noqa: E402,F401
 
 
-# Tab titles and the URL bar sit in the top strip, so an on-quiz capture can
-# usually be settled from a crop. Anything else must be confirmed against the
-# full frame before it is called a tab-leave.
+# Tab titles and the URL bar sit in the top strip, so an on-quiz capture is
+# usually settled from a crop; anything else is confirmed on the full frame.
 TOP_STRIP = (0.0, 0.25)
 
 

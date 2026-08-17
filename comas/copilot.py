@@ -1,4 +1,5 @@
-# OCR based detection of GitHub Copilot and Cursor in screenshots. Uses the test shots and looks for keywords in the OCR text, as well as template matching and an optional ML model. Results are written to a CSV file for analysis.
+# Detects GitHub Copilot and Cursor: OCR keywords for chat panels, a CNN for
+# inline ghost text, optional template matching.
 
 from __future__ import annotations
 
@@ -177,10 +178,9 @@ def detect_via_template(image_path, templates_dir,
     return {"score": score, "best_match": best, "templates_searched": len(templates)}
 
 
-# Above this the model is confident enough on its own: the screenshot is going
-# to be flagged either way, so the expensive OCR pass adds nothing. Deliberately
-# one sided - a low model score does NOT allow skipping OCR, because the model
-# only learned inline ghost text and would miss an open chat panel.
+# Above this the screenshot is flagged regardless, so OCR adds nothing.
+# One-sided on purpose: a LOW score must not skip OCR, or an open chat panel
+# the model never learned would be missed.
 ML_CONFIDENT = 0.90
 
 
@@ -240,12 +240,9 @@ class CopilotDetector:
             if tpl["score"] > ev.score:
                 ev.score, ev.method = tpl["score"], "template"
 
-        # An AI coding assistant lives inside a code editor. If the capture is
-        # not an editor, the model is being asked about something it was never
-        # trained on and its answer is not meaningful - so it is discarded and
-        # the screenshot is judged on text alone. Keyword matches survive:
-        # reading "GitHub Copilot" on screen is direct evidence wherever it
-        # appears. This is what makes browser training negatives unnecessary.
+        # Outside an editor the model is being asked about something it never
+        # saw in training, so its answer is discarded. Keyword matches survive:
+        # reading "GitHub Copilot" on screen is evidence wherever it appears.
         if self.gate_ml_on_ide and ev.ocr_ran and not ev.is_ide:
             ocr_score, ocr_method = score_from_keywords(ev.strong_matches,
                                                         ev.weak_matches)

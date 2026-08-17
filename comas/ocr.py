@@ -55,10 +55,8 @@ def _ocr_image(path: Path, region: Optional[tuple[float, float]] = None) -> str:
 
 
 def _worker_init():
-    # Tesseract multithreads through OpenMP. Left alone, every worker spawns its
-    # own thread pool and they fight over the cores - measurably slower than
-    # running sequentially. One thread per worker process is what makes the
-    # parallel path a win.
+    # Tesseract multithreads via OpenMP; unconstrained workers fight over the
+    # cores and run ~6x slower than sequential. One thread each fixes it.
     os.environ["OMP_THREAD_LIMIT"] = "1"
 
 
@@ -98,7 +96,7 @@ class OCRCache:
 
     def extract_many(self, paths: Iterable[Path], region=None,
                      workers: Optional[int] = None, progress=None) -> None:
-        """OCR a batch in parallel, filling the cache. Already-cached images are skipped."""
+        """OCR a batch in parallel, skipping anything already cached."""
         paths = [Path(p) for p in paths]
         todo = []
         keys = {}

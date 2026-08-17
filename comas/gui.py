@@ -17,9 +17,7 @@ from .copilot import (CopilotDetector, build_ml_scorer, ml_is_confident,
 from .ocr import DEFAULT_WORKERS as OCR_WORKERS
 from .ocr import OCRCache
 
-# ---- palette ---------------------------------------------------------------
-# Carleton brand red on a clean, flat, near-white surface. The image stage is
-# near-black so screenshots read like slides on a projector.
+# Carleton brand palette.
 BG = "#fafafa"
 CARD = "#ffffff"
 BORDER = "#e5e7eb"
@@ -41,24 +39,13 @@ SMALL = (FONT, 11)
 TINY = (FONT, 10)
 
 MODES = ["VSCODE Cheating", "Brightspace Cheating", "VSCODE + Brightspace Cheating"]
-# Calibrated on REAL screenshots for the shipped tiled checkpoint
-# (vscode_tiles_2x.pt): 0.9925 gives 79% recall at 8% false positives on 14
-# real ghost-text and 13 real clean captures.
-#
-# Thresholds belong to a checkpoint AND to an inference mode. A value derived
-# from synthetic data is worthless here - on synthetic images scores spread
-# across 0-1, while on real captures they bunch up near 1.0, so a synthetic
-# threshold of 0.30 flags every screenshot. Re-derive with
-# `python3 -m comas.compare_checkpoints` after any retrain.
-#
-# Caveat: tuned on 27 images, so fitted to a small sample.
+# Calibrated on 27 real screenshots for vscode_tiles_2x.pt: 79% recall at 8%
+# false positives. Specific to this checkpoint and inference mode - re-derive
+# with `python3 -m comas.compare_checkpoints` after retraining.
 FLAG_THRESHOLD = 0.9925
 
-# The keyword detector lives on its own scale: a strong match tops out at 0.95,
-# below the model threshold above, so sharing one cutoff would silently disable
-# OCR entirely - a screenshot with "GitHub Copilot" plainly readable would be
-# missed unless the model happened to agree. The two signals are thresholded
-# independently and either one can raise a flag.
+# Keyword scores top out at 0.95, below the model threshold, so the two
+# signals need separate cutoffs or OCR could never raise a flag.
 OCR_FLAG_THRESHOLD = 0.75
 VIEW_W, VIEW_H = 1160, 620
 
@@ -93,8 +80,7 @@ class Button(tk.Label):
 
         f = tkfont.Font(family=font[0], size=font[1],
                         weight=font[2] if len(font) > 2 else "normal")
-        # NB: not _w / _h - tkinter.Misc stores the widget's Tcl path in
-        # self._w, and super().__init__ would overwrite our width with it
+        # not _w: tkinter.Misc stores the widget's Tcl path there
         self._pill_w = width or f.measure(text) + padx * 2
         self._pill_h = f.metrics("linespace") + pady * 2
 
@@ -111,8 +97,7 @@ class Button(tk.Label):
         self._bg, self._fg = bg, fg
         self._hover = hover or bg
         self._border = border or bg
-        # keep references: Tk does not own PhotoImage and it would be
-        # garbage collected, leaving a blank button
+        # keep references or Tk garbage-collects them into blank buttons
         self._img_normal = _pill(self._pill_w, self._pill_h, self._radius,
                                  self._bg, self._border)
         self._img_hover = _pill(self._pill_w, self._pill_h, self._radius,
@@ -165,8 +150,7 @@ class App(tk.Tk):
         self._ml_scorer = None
         self._ml_scorer_built = False
         self._ml_status = "not loaded"
-        # bumped whenever the user leaves a screen, so a scan that finishes
-        # after they navigate away is ignored instead of hijacking the view
+        # invalidates a scan that finishes after the user navigates away
         self._run_id = 0
 
         self._build_header()
@@ -187,8 +171,7 @@ class App(tk.Tk):
             img = Image.open(logo_path)
             img.thumbnail((260, 58), Image.LANCZOS)
             self._logo = ImageTk.PhotoImage(img)
-            # a Label rather than a Button: Aqua would draw button chrome
-            # around the wordmark
+            # Label, not Button: Aqua draws chrome around the wordmark
             home = tk.Label(inner, image=self._logo, bg=CARD, cursor="hand2")
         else:
             home = tk.Label(inner, text="Carleton University", bg=CARD, fg=INK,
@@ -255,9 +238,8 @@ class App(tk.Tk):
                                bg=BG, fg=FAINT, font=SMALL)
         self.status.pack()
 
-        # The trained model is ~90 MB and is distributed separately from the
-        # source. Say so plainly rather than silently degrading to OCR only,
-        # which would miss most inline ghost text.
+        # the model ships separately; say so rather than silently
+        # degrading to OCR, which misses most inline ghost text
         if not self.cfg.paths.checkpoint.exists():
             warn = tk.Frame(wrap, bg="#fff4e5", highlightbackground="#f0c890",
                             highlightthickness=1)
@@ -327,11 +309,8 @@ class App(tk.Tk):
         if use_copilot:
             ml_scorer = self._get_ml_scorer()
             self._queue.put(("model_status", self._ml_status))
-            # OCR runs on every screenshot here, even ones the model is sure
-            # about. The keywords are the only reliable way to tell a chat
-            # panel from inline ghost text, and the reviewer is shown which it
-            # was. Skipping OCR on confident detections would be faster but
-            # would leave exactly the panel cases unlabelled.
+            # OCR always runs: keywords are the only way to tell a chat
+            # panel from inline ghost text, which the reviewer is shown
             copilot = CopilotDetector(ocr_cache=self.ocr_cache,
                                       ml_scorer=ml_scorer,
                                       skip_ocr_when_confident=False)
@@ -368,17 +347,14 @@ class App(tk.Tk):
                                                      ev.weak_matches)[0]
                 r["assistant_kind"] = self._assistant_kind(ev)
                 r["score"] = max(r["score"], ev.score)
-                # A strong keyword match is the assistant's own interface text
-                # read straight off the screen - evidence a reviewer can verify
-                # in a glance, unlike a model score. It ranks above any model
-                # output so those screenshots come first in the queue.
+                # readable interface text is verifiable evidence, so it
+                # outranks any model score in the queue
                 if ev.strong_matches:
                     r["score"] = 1.0
                 r["left_vscode"] = self._left_vscode(
                     ev.is_ide, ev.ocr_ran, combined=use_brightspace)
                 r["score"] = max(r["score"], r["left_vscode"])
-                # tiled inference reports which tile fired, so the reviewer can
-                # be shown where to look instead of scanning the whole capture
+                # tiled inference reports which tile fired
                 if hasattr(copilot.ml_scorer, "box_for"):
                     r["box"] = copilot.ml_scorer.box_for(p)
             if brightspace:
@@ -503,11 +479,8 @@ class App(tk.Tk):
         tk.Label(thr, text="FLAG THRESHOLD", bg=BG, fg=FAINT,
                  font=(FONT, 9, "bold")).pack(side="left", padx=(0, 8))
 
-        # The tiled model's scores bunch up just below 1.0, so the useful
-        # decisions all live between 0.98 and 1.00. A coarse 0.05-step slider
-        # capped at 0.95 could not even express the calibrated default and
-        # silently clamped it. Fine steps plus a typed box cover both the
-        # broad range and the precision the top end needs.
+        # scores bunch below 1.0, so the useful range is 0.98-1.00; a
+        # 0.05-step slider capped at 0.95 clamped the default silently
         self.thr_slider = tk.Scale(
             thr, from_=0.50, to=1.0, resolution=0.0001,
             orient="horizontal", length=300, bg=BG, fg=INK,
@@ -525,7 +498,7 @@ class App(tk.Tk):
         self.thr_entry.bind("<Return>", self._on_threshold_typed)
         self.thr_entry.bind("<FocusOut>", self._on_threshold_typed)
 
-        # jumping straight to the operating points that were actually measured
+        # measured operating points
         for label, value in (("strict", 0.9967), ("default", 0.9925),
                              ("loose", 0.9882)):
             Button(thr, label, command=lambda v=value: self._set_threshold(v),

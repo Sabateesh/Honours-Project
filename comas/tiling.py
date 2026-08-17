@@ -1,20 +1,10 @@
-# Tiled detection.
+# Tiled detection: cut the screenshot into overlapping tiles, score each at
+# native resolution, take the highest. Resizing a whole screenshot to the
+# network input shrinks ghost text to a few pixels; a chat panel survives it.
 #
-# Scoring a whole screenshot means resizing it to the network's input size, and
-# that is fatal for ghost text: a 15px line of dim code in a 1680x1050 capture
-# survives a resize to 768 as about 4 pixels, and the augmentations blur what
-# is left. A chat panel occupies a third of the screen and survives anything.
-# That gap is the measured weakness of the whole-image model.
-#
-# Tiling removes the resize. The screenshot is cut into overlapping square
-# tiles, each tile is scored on its own, and the image takes the highest tile
-# score. Ghost text then occupies a usable fraction of the tile it falls in.
-#
-# Tiles are sized as a fraction of image HEIGHT rather than a fixed pixel count,
-# so a tile covers the same amount of interface whether the capture came from a
-# 900px laptop screen or a 2338px Retina display. Without this the effective
-# text size would differ by 2x between the synthetic training data and real
-# screenshots.
+# Tiles are sized as a fraction of image height, not a fixed pixel count, so a
+# tile covers the same amount of interface on a laptop screen as on a Retina
+# capture.
 from __future__ import annotations
 
 import argparse
@@ -33,9 +23,8 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 def tile_boxes(width: int, height: int, tile_frac: float = 0.34,
                overlap: float = 0.35, min_px: int = 256) -> list[tuple[int, int, int, int]]:
-    """Overlapping square tiles covering the image. Overlap matters: a ghost
-    line straddling a tile edge would otherwise be split across two tiles and
-    look like nothing in either."""
+    """Overlapping square tiles. Overlap stops a ghost line landing on a tile
+    edge and looking like nothing in either half."""
     side = max(min_px, int(height * tile_frac))
     side = min(side, width, height)
     stride = max(1, int(side * (1.0 - overlap)))
@@ -89,12 +78,9 @@ def iter_tiles(img: Image.Image, tile_frac=0.34, overlap=0.35, min_px=256):
 def build_tile_dataset(src: Path, out: Path, tile_frac=0.34, overlap=0.35,
                        min_px=256, min_frac=0.5, neg_per_pos=3, seed=42,
                        max_pos_per_image=3) -> dict:
-    """Turn full screenshots plus their region labels into a tile dataset.
-
-    Tiles from a positive image that do NOT contain the signal become
-    negatives. They are the most valuable negatives available: identical
-    theme, identical code, identical everything, differing only by the absence
-    of the thing being detected."""
+    """Turn full screenshots plus region labels into a tile dataset. Tiles from
+    a positive image that miss the signal become negatives - identical theme
+    and code, differing only by the absence of what is being detected."""
     rng = random.Random(seed)
     labels_path = src / "labels.json"
     if not labels_path.exists():
@@ -125,10 +111,8 @@ def build_tile_dataset(src: Path, out: Path, tile_frac=0.34, overlap=0.35,
             else:
                 negatives.append((box, tile))
 
-        # A full-height chat panel intersects many tiles while a ghost line
-        # intersects one or two. Uncapped, panel tiles outnumber ghost tiles
-        # several to one and the tile model inherits exactly the imbalance
-        # tiling was meant to fix.
+        # a full-height panel hits many tiles, a ghost line one or two;
+        # uncapped, panels swamp the class
         if len(positives) > max_pos_per_image:
             positives = rng.sample(positives, max_pos_per_image)
 
@@ -153,10 +137,8 @@ def build_tile_dataset(src: Path, out: Path, tile_frac=0.34, overlap=0.35,
                      stats["images"], stats["pos"], stats["neg"])
         _ = variant
 
-    # Images present on disk but absent from labels.json - browser screenshots
-    # folded in from the Brightspace generator. They carry no signal regions,
-    # so every tile is a negative. Without them the tile model would never see
-    # anything that is not a code editor.
+    # unlabelled images (browser screenshots) carry no signal, so every tile
+    # is a negative; without them the model never sees a non-editor
     known = set(labels)
     for folder in ("copilot_active", "no_copilot"):
         d = src / folder
@@ -183,9 +165,8 @@ def build_tile_dataset(src: Path, out: Path, tile_frac=0.34, overlap=0.35,
 # --------------------------------------------------------------------------
 
 class TiledScorer:
-    """Wraps a tile-level model. Scores every tile of a screenshot at native
-    resolution and reports the maximum, plus which tile produced it - which
-    gives localisation for free."""
+    """Scores every tile at native resolution, reports the maximum and which
+    tile produced it."""
 
     def __init__(self, scorer, tile_frac=0.34, overlap=0.35, min_px=256,
                  batch=16):

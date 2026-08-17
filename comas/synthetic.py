@@ -1,16 +1,9 @@
-# Generates synthetic IDE screenshots for the two ways an AI assistant shows up
-# on screen: dimmed inline "ghost text" at the cursor, and an assistant chat
-# panel docked to the right.
+# Generates synthetic IDE screenshots showing inline ghost text or a chat panel.
 #
-# Negatives are not just clean editors. Roughly half of them put some *other*
-# panel in that same right hand slot (Outline, Extensions, Source Control,
-# Search), because a model trained only against clean editors learns "panel on
-# the right = cheating" and then flags every student with the Extensions view
-# open. The chat panel has to be told apart by its structure - message bubbles
-# stacked above a composer box - not by its position.
-#
-# Comments stay in the corpus on purpose: they are gray too, so the model can't
-# just learn "gray = ghost text".
+# Half the negatives put a different panel (Outline, Extensions, Source
+# Control, Search) in the same right-hand slot, so the model cannot separate
+# the classes on panel position alone. Comments stay in the corpus for the same
+# reason: they are grey too.
 from __future__ import annotations
 
 import argparse
@@ -81,10 +74,7 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ]
 
-# Real assistants render inline suggestions in ITALIC, not just a dimmer
-# colour. Matching that turned out to matter: a model trained on upright grey
-# text has never seen the slant that is arguably the most obvious cue a human
-# uses to spot a suggestion.
+# Real assistants render suggestions in italic, not just a dimmer colour.
 ITALIC_FONT_CANDIDATES = [
     "/System/Library/Fonts/Menlo.ttc",          # Menlo Italic lives at index 1
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Oblique.ttf",
@@ -130,12 +120,9 @@ COMPOSER_HINTS = ["Ask anything", "Send a message", "Type a question",
 
 NEG_PANELS = ["outline", "extensions", "scm", "search"]
 
-# VS Code inlay hints: greyed type annotations rendered inline, in the same
-# dim colour as ghost text. They are the single most confusable legitimate
-# feature, and real screenshots are full of them. Drawn into BOTH classes on
-# purpose - if they only appeared in negatives the model would learn "grey
-# annotation means innocent" and be wrong the moment a student has hints on
-# while an assistant is suggesting.
+# VS Code inlay hints: grey type annotations in the same colour as ghost text,
+# and the most confusable legitimate feature. Drawn into BOTH classes - if they
+# only appeared in negatives the model would learn "grey annotation = innocent".
 INLAY_HINTS = [": str", ": int", ": bool", ": float", " -> None",
                ": list[str]", ": dict", " -> bool", ": Path", ": Optional[int]"]
 
@@ -166,13 +153,8 @@ TOKEN_RE = re.compile(
 
 
 class _LogicalFont:
-    """A font rendered at `scale`x but *measured* in 1x units.
-
-    Layout code positions things using font.getlength(). If the font were
-    simply loaded larger, those measurements would come back scaled while the
-    surrounding constants stayed at 1x, and the layout would fall apart.
-    Reporting logical lengths keeps every existing layout expression correct at
-    any scale."""
+    """A font rendered at `scale`x but measured in 1x units, so layout code
+    written against 1x constants stays correct at any scale."""
 
     def __init__(self, font, scale):
         self.font = font
@@ -186,13 +168,9 @@ class _LogicalFont:
 
 
 class _ScaledDraw:
-    """Wraps ImageDraw so the generator can keep drawing in 1x coordinates
-    while the canvas underneath is `scale`x larger.
-
-    This is what a Retina capture actually is: identical layout, text rendered
-    at twice the pixel density. Upscaling a 1x render afterwards would not do -
-    that produces blurry text, and the thing being detected is a subtle
-    difference in text colour."""
+    """Draws 1x coordinates onto a `scale`x canvas - what a Retina capture
+    actually is. Upscaling a 1x render instead would blur the text, which is
+    the signal being detected."""
 
     def __init__(self, draw, scale):
         self._d = draw
@@ -514,10 +492,7 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
 
         y_first = y
         if ghost_here:
-            # typed prefix in normal colours, suggestion continues dimmed and
-            # italic. A whole-line suggestion (empty prefix) is the common
-            # case in practice - the caret sits at the start of a blank line
-            # and the entire proposed line is rendered as ghost text.
+            # typed prefix in normal colours, suggestion dimmed and italic
             prefix, first_ghost = ghost_lines[0]
             x_end = _draw_code_line(draw, code_x, y, tokenize_line(prefix), theme, font)
             cursor_x = x_end
@@ -548,9 +523,7 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
         else:
             x_end = _draw_code_line(draw, code_x, y, tokenize_line(lines[idx]),
                                     theme, font)
-            # an inlay hint sits right where a suggestion would, in the same
-            # dim colour - including on the cursor line, which is the hardest
-            # case for the model to tell apart
+            # inlay hints sit where a suggestion would, in the same colour
             if inlay and lines[idx].strip() and rng.random() < 0.30:
                 _draw_code_line(draw, x_end, y,
                                 [(rng.choice(INLAY_HINTS), "default")],
@@ -608,9 +581,7 @@ def make_sample(corpus, rng, variant: str, scale: int = 1):
     else:
         panel = None
 
-    # Park the cursor on a comment for some clean negatives. A comment is dim
-    # text sitting exactly where a suggestion would appear, so this forces the
-    # model to read the text rather than just spotting grey pixels at the caret.
+    # cursor on a comment: dim text exactly where a suggestion would be
     if variant == "clean" and rng.random() < 0.40:
         comments = [i for i in range(start, min(start + 30, len(lines) - 1))
                     if lines[i].strip().startswith("#")]
@@ -622,10 +593,8 @@ def make_sample(corpus, rng, variant: str, scale: int = 1):
 
     ghost = []
     if with_ghost:
-        # The suggestion has to be worth seeing. Parking the caret on a blank
-        # or near-blank line produces a "suggestion" one space wide: an image
-        # labelled positive that shows nothing at all, which is label noise on
-        # the hardest class.
+        # a caret on a blank line yields a one-space "suggestion": an image
+        # labelled positive that shows nothing
         usable = [i for i in range(start, min(start + 30, len(lines) - 1))
                   if len(lines[i].strip()) >= MIN_GHOST_CHARS]
         if usable:
@@ -633,10 +602,7 @@ def make_sample(corpus, rng, variant: str, scale: int = 1):
         full = lines[cursor_line]
         stripped = len(full) - len(full.lstrip())
         if rng.random() < 0.6:
-            # whole-line suggestion: caret sits at the indent and the entire
-            # proposed line is ghost text. This is what the real captures
-            # mostly show, and it looks quite different from a mid-line
-            # completion, so both patterns need to be in the training set.
+            # whole-line suggestion, which is what real captures mostly show
             cut = stripped
         else:
             # leave at least MIN_GHOST_CHARS of the line as the suggestion
@@ -663,13 +629,8 @@ def make_image(corpus, rng, variant: str, scale: int = 1):
 
 def _plan(n_active: int, n_clean: int, hard_neg_frac: float, rng,
           ghost_only: bool = False):
-    """Positives split across the two ways an assistant shows up; a chunk of the
-    negatives carry a non-chat panel so position alone is not a giveaway.
-
-    With ghost_only the model is trained purely as a ghost-text detector and
-    chat panels are left to the OCR keyword detector, which identifies them
-    exactly. Every positive then targets the one thing the model is actually
-    needed for."""
+    """With ghost_only every positive is inline ghost text and chat panels are
+    left to the OCR keyword detector, which identifies them exactly."""
     jobs = []
     for i in range(n_active):
         r = i / max(1, n_active)
