@@ -13,13 +13,10 @@ This desktop app reads a folder of those screenshots and **sorts them
 by how suspicious they look**, so a TA reviews the images most worth
 their attention instead of clicking through ten thousand.
 
-It never decides that anyone cheated. It produces a ranking and a score, and a
-human makes every call.
-
 It looks for two specific things:
 
 1. **An AI coding assistant in VS Code** — either an open Copilot or Cursor
-   chat panel, or an inline "ghost text" suggestion sitting at the cursor.
+   chat panel, or an inline "ghost text" suggestion.
 
 2. **Leaving the Brightspace quiz** — the student navigated away from the quiz
    page they were supposed to be on.
@@ -32,14 +29,13 @@ and an export you can attach to an academic integrity case.
 
 # Getting it running
 
-You need three things: **Python**, **Tesseract** (reads text out of images),
-and the **project itself**. The installer handles everything after that.
+You need three things: **Python**, **Tesseract**,
+and the **project itself**.
 
 
 ## macOS — step by step
 
-**1. Install Homebrew** if you don't have it. Open Terminal (Cmd+Space, type
-"Terminal") and paste:
+**1. Install Homebrew** Open Terminal and paste:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -51,67 +47,37 @@ and the **project itself**. The installer handles everything after that.
 brew install python@3.11 python-tk@3.11 tesseract
 ```
 
-`python-tk` is not optional. macOS ships an older Python whose window toolkit
-has a rendering bug that draws the app as a blank grey box.
-
-**3. Download the project.** Either clone it:
+**3. Download the project.** 
 
 ```bash
 git clone https://github.com/Sabateesh/Honours-Project.git
 cd Honours-Project
 ```
-
-or download the [ZIP](https://github.com/Sabateesh/Honours-Project/archive/refs/heads/main.zip),
-double-click to unzip, and `cd` into the folder.
-
 **4. Run the installer:**
 
 ```bash
 ./install.sh
 ```
 
-It checks your Python and Tesseract, builds an isolated environment, installs
-the app, and checks the detection model is present. Re-running it is safe.
-
 **5. Start it.** Double-click **`Run CoMas Triage.command`**, which the
-installer leaves in the folder. Or from Terminal:
-
-```bash
-source .venv/bin/activate
-comas-triage
-```
+installer leaves in the folder. 
 
 ## Windows — step by step
 
 **1. Install Python** from [python.org/downloads](https://www.python.org/downloads/).
 
-Two things you must get right in the setup window:
-
-- tick **"Add python.exe to PATH"** on the first screen — it's easy to miss
-- leave **"tcl/tk and IDLE"** enabled under Optional Features — that's the
-  window toolkit, and the app cannot open without it
-
 **2. Install Tesseract** from the
 [UB-Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki).
-
-Just run it with the defaults. It has no "add to PATH" option and it installs
-somewhere different depending on whether you pick "just me" or "all users" —
-`install.bat` checks both locations and wires it up for you, so you don't need
-to touch environment variables.
 
 **3. Download the project** as a
 [ZIP](https://github.com/Sabateesh/Honours-Project/archive/refs/heads/main.zip).
 
-**4. Extract it to `C:\CoMas`.** Right-click the ZIP → **Extract All** → change
-the destination to `C:\CoMas` → Extract.
+**4. Extract it 
 
--Download 
-
-**5. Run the installer.** Open `C:\CoMas` and double-click **`install.bat`**.
+**5. Run the installer.** Open and double-click **`install.bat`**.
 
 **6. Start it.** Double-click **`Run CoMas Triage.bat`**, which the installer
 leaves next to it.
-
 
 ## The detection model
 
@@ -124,12 +90,6 @@ Honours-Project/
     vscode_tiles_2x.pt          90 MB, the ResNet50 ghost-text detector
     vscode_tiles_2x.meta.json   backbone and input size the app reads on load
 ```
-
-If those two files are ever missing, the app still starts but falls back to
-text-only detection, which finds 3 of 14 real ghost-text screenshots instead of
-11. The installer notices and pulls them from
-[Releases](https://github.com/Sabateesh/Honours-Project/releases); you can also
-drop them into `checkpoints/` by hand.
 
 ---
 
@@ -153,7 +113,7 @@ the flag.
 **4. Check each one** as **Reviewed** or **Dismissed**.
 
 **5. Export.** You get a timestamped folder with copies of the flagged images,
-a CSV of every score, and a summary suitable for an academic integrity case.
+a CSV of every score.
 
 
 The threshold slider adjusts sensitivity live without re-running the analysis.
