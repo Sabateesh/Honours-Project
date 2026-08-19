@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "comas-triage"
-version = "1.0.0"
+version = "1.1.0"
 description = "Flags suspicious CoMas exam screenshots so proctors review the most likely cases first"
 readme = "README.md"
 requires-python = ">=3.10"

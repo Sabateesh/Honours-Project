@@ -7,7 +7,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 set REPO_URL=https://github.com/Sabateesh/Honours-Project
-set MODEL_TAG=v1.0.0
+set MODEL_TAG=v1.1.0
 
 echo CoMas Screenshot Triage - installer
 echo.
