@@ -2,6 +2,7 @@
 import pytest
 
 pytest.importorskip("tkinter")
+from comas.brightspace import LEFT_QUIZ_SCORE
 from comas.gui import App
 
 
@@ -22,7 +23,20 @@ class _Ev:
 
 def test_keyword_match_is_reported_as_chat_panel():
     kind = App._assistant_kind(_Ev(strong=["github copilot"], tool="copilot"))
-    assert kind == "chat panel (copilot)"
+    assert kind == "chat panel"
+
+
+def test_the_assistant_is_never_named_to_the_reviewer():
+    """A vendor guess rests on whichever keyword OCR happened to read, and
+    changes nothing about what the reviewer does next."""
+    for tool in ("copilot", "cursor", "both", "unknown"):
+        kind = App._assistant_kind(_Ev(strong=["chat"], tool=tool))
+        assert kind == "chat panel"
+    r = _result(1.0, cop=1.0, kind=App._assistant_kind(
+        _Ev(strong=["github copilot"], tool="copilot")))
+    text = App._detail_text(r, 0.5)
+    assert text == "CHEATING DETECTED: chat panel"
+    assert "copilot" not in text.lower() and "cursor" not in text.lower()
 
 
 def test_detection_without_keywords_is_ghost_text():
@@ -130,40 +144,55 @@ def test_button_does_not_shadow_tk_internals():
 
 def test_detail_text_respects_threshold():
     r = _result(0.6, cop=0.6)
-    assert App._detail_text(r, 0.5) == "AI coding assistant detected"
+    assert App._detail_text(r, 0.5) == "CHEATING DETECTED: AI assistant"
     assert App._detail_text(r, 0.7) == "no signal above threshold"
 
 
 def test_detail_text_combines_both_detectors():
-    r = _result(0.95, cop=0.95, bs=0.95, verdict="left_quiz", sites="chatgpt")
+    r = _result(1.0, cop=0.95, bs=LEFT_QUIZ_SCORE, verdict="left_quiz",
+                sites="chatgpt")
     text = App._detail_text(r, 0.5)
-    assert "AI coding assistant detected" in text
+    assert "CHEATING DETECTED" in text
     assert "left_quiz" in text and "chatgpt" in text
 
 
 def test_detail_text_falls_back_to_verdict_when_no_sites():
     r = _result(0.5, bs=0.5, verdict="no_quiz_visible", sites="")
-    assert "no_quiz_visible (no_quiz_visible)" in App._detail_text(r, 0.5)
+    assert "no_quiz_visible (unrecognized page)" in App._detail_text(r, 0.5)
 
 
 def test_detail_text_ignores_missing_detectors():
     r = _result(0.9, cop=None, bs=0.9, verdict="left_quiz", sites="google")
-    assert "AI coding" not in App._detail_text(r, 0.5)
+    assert "CHEATING DETECTED" not in App._detail_text(r, 0.5)
+
+
+def test_tab_leave_is_reported_at_every_threshold():
+    """The detector uses no model, so a tab-leave is a decision and not a
+    confidence. At 0.95 it fell under the model's 0.9925 cutoff and the
+    reviewer was told 'no signal above threshold' about a capture the
+    detector had already settled."""
+    r = _result(LEFT_QUIZ_SCORE, bs=LEFT_QUIZ_SCORE, verdict="left_quiz",
+                sites="chatgpt")
+    for threshold in (0.50, 0.9925, 1.0):
+        assert "left_quiz" in App._detail_text(r, threshold)
+        assert r["score"] >= threshold      # stays in the flagged queue
 
 
 def test_ide_screenshot_not_flagged_in_combined_mode():
     # a VS Code capture is the student doing their exam, not a tab-leave
-    assert App._brightspace_contribution("left_quiz", 0.95, combined=True,
-                                         is_ide=True) == 0.0
+    assert App._brightspace_contribution("left_quiz", LEFT_QUIZ_SCORE,
+                                         combined=True, is_ide=True) == 0.0
 
 
 def test_ide_gets_no_free_pass_in_brightspace_only_mode():
-    assert App._brightspace_contribution("left_quiz", 0.95, combined=False,
-                                         is_ide=True) == 0.95
+    assert App._brightspace_contribution(
+        "left_quiz", LEFT_QUIZ_SCORE, combined=False,
+        is_ide=True) == LEFT_QUIZ_SCORE
 
 
 def test_non_ide_tab_leave_counts_in_combined_mode():
-    assert App._brightspace_contribution("left_quiz", 0.95, combined=True,
-                                         is_ide=False) == 0.95
+    assert App._brightspace_contribution(
+        "left_quiz", LEFT_QUIZ_SCORE, combined=True,
+        is_ide=False) == LEFT_QUIZ_SCORE
     assert App._brightspace_contribution("on_quiz", 0.05, combined=True,
                                          is_ide=False) == 0.05

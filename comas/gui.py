@@ -38,9 +38,11 @@ SMALL = (FONT, 11)
 TINY = (FONT, 10)
 
 MODES = ["VSCODE Cheating", "Brightspace Cheating", "VSCODE + Brightspace Cheating"]
-# Calibrated on 27 real screenshots for vscode_tiles_2x.pt: 79% recall at 8%
-# false positives. Specific to this checkpoint and inference mode - re-derive
-# with `python3 -m comas.compare_checkpoints` after retraining.
+# Calibrated on 27 real screenshots for vscode_tiles_2x.pt applied TILED: 79%
+# recall at 8% false positives. Every checkpoint sits on its own scale, so this
+# number is void the moment config.yaml points somewhere else - re-derive with
+# `python3 eval_vscode.py`. Measured zero-false-positive points elsewhere:
+# vscode_tiles.pt tiled 0.76, vscode_768_v3.pt whole 0.82.
 FLAG_THRESHOLD = 0.9925
 
 # Keyword scores top out at 0.95, below the model threshold, so the two
@@ -386,10 +388,13 @@ class App(tk.Tk):
         The model is a single binary classifier and cannot say. The keywords
         can: they only appear in an assistant's own interface, so a match means
         a panel is open. A detection with no keywords anywhere on screen is
-        the inline case - ghost text carries no identifying text at all."""
+        the inline case - ghost text carries no identifying text at all.
+
+        Which assistant it was is not named. The reviewer's decision is the
+        same either way, and the vendor guess rests on whichever keyword OCR
+        happened to read - a claim in an integrity case should not."""
         if ev.strong_matches or ev.weak_matches:
-            tool = ev.detected_tool if ev.detected_tool != "unknown" else ""
-            return f"chat panel{f' ({tool})' if tool else ''}"
+            return "chat panel"
         if not ev.ocr_ran:
             return None            # cannot tell without the text
         return "inline ghost text"
@@ -477,8 +482,9 @@ class App(tk.Tk):
         tk.Label(thr, text="FLAG THRESHOLD", bg=BG, fg=FAINT,
                  font=(FONT, 9, "bold")).pack(side="left", padx=(0, 8))
 
-        # scores bunch below 1.0, so the useful range is 0.98-1.00; a
-        # 0.05-step slider capped at 0.95 clamped the default silently
+        # the useful range moves with the checkpoint - a tiled model bunches
+        # its scores into 0.98-1.00, a whole-image one spreads them over
+        # 0.7-1.0 - so the slider stays fine-grained across the whole span
         self.thr_slider = tk.Scale(
             thr, from_=0.50, to=1.0, resolution=0.0001,
             orient="horizontal", length=300, bg=BG, fg=INK,
@@ -496,8 +502,8 @@ class App(tk.Tk):
         self.thr_entry.bind("<Return>", self._on_threshold_typed)
         self.thr_entry.bind("<FocusOut>", self._on_threshold_typed)
 
-        # measured operating points
-        for label, value in (("strict", 0.9967), ("default", 0.9925),
+        # measured operating points, see FLAG_THRESHOLD
+        for label, value in (("strict", 0.9967), ("default", FLAG_THRESHOLD),
                              ("loose", 0.9882)):
             Button(thr, label, command=lambda v=value: self._set_threshold(v),
                    bg=CARD, fg=DIM, hover="#f1f5f9", border=BORDER,

@@ -1,18 +1,38 @@
-# Shipped configuration: the tile-trained model applied to native-resolution
-# tiles. Chosen on REAL screenshots, not synthetic ones.
+# Shipped configuration: vscode_tiles_2x applied to native-resolution tiles.
+# Chosen on REAL screenshots, not synthetic ones, and measured on two separate
+# real capture sets rather than one.
 #
-# Real-data comparison (14 real ghost-text captures, 13 real clean captures),
-# recall at <=8% false positives:
-#     OCR keyword baseline .................... 0.21
-#     vscode_768_v3, whole image .............. 0.57   (best synthetic score)
-#     vscode_tiles_2x, whole image ............ 0.14
-#     vscode_tiles_2x, TILED .................. 0.79   <- this
+# test_shots/VSCODE (10 ghost captures, 5 chat panels, 9 clean), ghost-text
+# AUROC via `python3 eval_vscode.py` - ghost text is the model's only job,
+# because the OCR keywords take the chat panels outright:
+#     vscode_768_v3,   whole ....... 0.889 +/- 0.079   (but see below)
+#     vscode_tiles,    TILED ....... 0.844 +/- 0.093
+#     vscode_768,      TILED ....... 0.722 +/- 0.119
+#     vscode_tiles_2x, TILED ....... 0.678 +/- 0.125   <- this
 #
-# The model with the best synthetic AUROC (0.999) is not the best on real
-# screenshots. Tiling was originally rejected on synthetic evidence and turned
-# out to be the strongest approach once measured against real captures.
+# Older capture set (14 positives, 13 clean), overall AUROC - the check that
+# the ranking above is not just noise from 24 images:
+#     vscode_tiles_2x, TILED ....... 0.868 +/- 0.071   <- this
+#     vscode_tiles,    TILED ....... 0.824 +/- 0.082
+#     vscode_768_v3,   whole ....... 0.786 +/- 0.089   (0% recall at 0 FP)
+#
+# The two sets disagree and the error bars cover the disagreement, so no
+# checkpoint is established as better. This one ships because it is the one
+# the 0.9925 threshold was calibrated against and the one with the longest
+# run of use. vscode_tiles is the strongest alternative: better on the newer
+# set (0.844 ghost, 50% recall at zero false positives against 30% here),
+# slightly worse on the older one. Revisit once the two sets are merged into
+# a single labelled evaluation.
+#
+# Tiling stays on for a second reason: it reports WHICH tile fired, and that is
+# the red box in the GUI. A whole-image checkpoint has nothing to draw. Only
+# tile-TRAINED checkpoints may run tiled - vscode_768_v3 drops from 0.889 to
+# 0.389 applied tile-wise. The setting belongs to the checkpoint, not the app.
 data:
   root: data_tiles/
+  # Training only. Inference reads the checkpoint's own meta.json img_size and
+  # falls back to this, so swapping in a checkpoint trained at another size
+  # scores it correctly instead of silently at the wrong resolution.
   img_size: 512
   num_workers: 4
   batch_size: 12

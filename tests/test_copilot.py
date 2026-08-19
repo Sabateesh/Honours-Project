@@ -186,6 +186,58 @@ def test_no_matching_sessions_is_cursor():
     assert "no matching sessions" in strong
     assert infer_tool(strong, weak) == "cursor"
 
+def test_panel_headers_flag_inside_the_editor():
+    """CHAT and SESSIONS are the assistant panel's own tab headers. Read
+    beside VS Code chrome they are the panel, so the capture is flagged
+    outright rather than merely scored."""
+    text = ("EXPLORER  main.py  TERMINAL  UTF-8  Spaces: 4  "
+            "CHAT  SESSIONS  Add context")
+    strong, weak = find_keywords(text)
+    assert "chat" in strong
+    assert "sessions" in strong
+    s, m = score_from_keywords(strong, weak)
+    assert s == 1.0 and m == "ocr_chat_panel"
+
+
+def test_panel_headers_attribute_no_tool():
+    """They name no vendor, so they must not turn a Copilot capture into
+    'both' or invent a tool of their own."""
+    text = "EXPLORER  app.py  TERMINAL  UTF-8  Chat  GitHub Copilot"
+    strong, weak = find_keywords(text)
+    assert "chat" in strong
+    assert infer_tool(strong, weak) == "copilot"
+    assert infer_tool(["chat", "sessions"], []) == "unknown"
+
+
+def test_panel_headers_ignored_outside_the_editor():
+    """The word is ordinary English everywhere else. A Brightspace page or a
+    browser tab reading 'Chat' is not an assistant, and must not be flagged."""
+    for text in ("Brightspace  Course Chat  Submit Quiz  (1 point)",
+                 "Gmail - Inbox (24)  Chat  Spaces  Meet",
+                 "Sessions - Conference programme"):
+        strong, weak = find_keywords(text)
+        assert "chat" not in strong
+        assert "sessions" not in strong
+        assert score_from_keywords(strong, weak)[0] == 0.0
+
+
+def test_panel_headers_need_a_whole_word():
+    """sessions.py sitting in the explorer is a filename, not a panel."""
+    text = "EXPLORER  sessions.py  chatbot.py  TERMINAL  UTF-8  Spaces: 4"
+    strong, _ = find_keywords(text)
+    assert "sessions" not in strong
+    assert "chat" not in strong
+
+
+def test_panel_header_beats_a_confident_model_score():
+    cache = _CountingCache("EXPLORER  main.py  TERMINAL  UTF-8  CHAT  SESSIONS")
+    det = CopilotDetector(ocr_cache=cache, ml_scorer=lambda p: 0.97)
+    ev = det.detect(Path("x.png"))
+    assert ev.is_ide is True
+    assert ev.score == 1.0 and ev.method == "ocr_chat_panel"
+    assert ev.detected_tool == "unknown"
+
+
 def test_both_tools_visible():
     text = "GitHub Copilot active. Also using Plan agent."
     strong, weak = find_keywords(text)

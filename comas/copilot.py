@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -50,6 +51,13 @@ IDE_KEYWORDS = [
     "spaces: 4", "utf-8", ".py", "outline", "timeline",
 ]
 
+# The tab headers on the assistant side panel. They name no vendor and are
+# ordinary English words, so they count only inside the editor: a Brightspace
+# page or a browser tab reading "Chat" is not an assistant. Inside VS Code the
+# panel is the assistant, so a hit here is the strongest evidence there is.
+CHAT_PANEL_KEYWORDS = ("chat", "sessions")
+CHAT_PANEL_SCORE = 1.0
+
 
 def looks_like_ide(text: str) -> bool:
     if not text:
@@ -83,13 +91,22 @@ def find_keywords(text: str) -> tuple[list[str], list[str]]:
     low = text.lower()
     strong = [k for k in STRONG_KEYWORDS if k in low]
     weak = [k for k in WEAK_KEYWORDS if k in low]
+    # Panel headers are admitted only once the editor is on screen. The match
+    # is whole-word and rejects a following extension, so chatbot.py and
+    # sessions.py in the explorer stay filenames rather than panel headers.
+    if looks_like_ide(low):
+        strong += [k for k in CHAT_PANEL_KEYWORDS
+                   if re.search(rf"\b{k}\b(?!\.[a-z0-9])", low)]
     return strong, weak
     
 
 def infer_tool(strong: list[str], weak: list[str]) -> str:
     tools = set()
     for k in strong:
-        tools.add(STRONG_KEYWORDS[k])
+        # Panel headers name no vendor; they detect without attributing.
+        tool = STRONG_KEYWORDS.get(k)
+        if tool:
+            tools.add(tool)
     for k in weak:
         if k in WEAK_KEYWORDS:
             tools.add(WEAK_KEYWORDS[k])
@@ -102,6 +119,9 @@ def infer_tool(strong: list[str], weak: list[str]) -> str:
 
 
 def score_from_keywords(strong: list[str], weak: list[str]) -> tuple[float, str]:
+    # An open panel is the assistant itself, not a trace of it: flag outright.
+    if any(k in CHAT_PANEL_KEYWORDS for k in strong):
+        return CHAT_PANEL_SCORE, "ocr_chat_panel"
     if strong:
         return 0.95, "ocr_strong"
     if len(weak) >= 2:
@@ -370,7 +390,14 @@ def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[MLScorer]:
                         pretrained=False).to(device)
     model.load_state_dict(torch.load(cfg.paths.checkpoint, map_location=device))
     model.eval()
-    _, eval_tfms = build_transforms(cfg.data.img_size)
+    # The checkpoint's own input size wins. Taking it from the config instead
+    # means swapping in a checkpoint trained at another size scores it at the
+    # wrong resolution - no error raised, just quietly worse numbers.
+    img_size = meta.get("img_size", cfg.data.img_size)
+    if img_size != cfg.data.img_size:
+        log.info("Checkpoint was trained at %dpx; using that rather than the "
+                 "configured %dpx.", img_size, cfg.data.img_size)
+    _, eval_tfms = build_transforms(img_size)
 
     text_encoder = TextEncoder(cfg.model.text_encoder, device=str(device)) \
         if cfg.model.use_ocr else None
