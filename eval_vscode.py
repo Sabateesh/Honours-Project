@@ -1,20 +1,9 @@
-# Scores every saved checkpoint on a labelled folder of real screenshots.
-#
-# Labels come from the filename, so one folder holds the whole set:
-#     "CHAT YES ..."  an assistant chat panel is open
-#     "YES ..."       inline ghost text
-#     "NO ..."        neither
-#
-#     python3 eval_vscode.py                      both inference modes
-#     python3 eval_vscode.py --mode tiled         tiled only
-#     python3 eval_vscode.py --only tiles         checkpoints matching "tiles"
-#
-# Scores are cached in scores_vscode.json, so an interrupted run resumes
-# where it stopped. Delete that file to rescore from scratch.
+
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -117,47 +106,99 @@ def score_keywords(paths, cache_path: Path):
     return scores
 
 
+def _se_auroc(a, n_pos, n_neg):
+    """Hanley-McNeil standard error - the reminder that these sets are small."""
+    if not n_pos or not n_neg or a != a:
+        return float("nan")
+    q1, q2 = a / (2 - a), 2 * a * a / (1 + a)
+    v = ((a * (1 - a) + (n_pos - 1) * (q1 - a * a)
+          + (n_neg - 1) * (q2 - a * a)) / (n_pos * n_neg))
+    return math.sqrt(max(v, 0.0))
+
+
+def _zero_fp_band(pos, neg):
+    """(lowest threshold that admits no negative, weakest positive). Any cutoff
+    in between catches every positive and no negative."""
+    return max(neg), min(pos)
+
+
 def report(results, mode, counts, max_fpr):
-    rows = []
+    """The CNN is judged on GHOST TEXT ONLY.
+
+    It is trained with --ghost-only and has never seen a chat panel, so
+    scoring it on panels measures nothing: it puts them below its own
+    negatives, which is correct behaviour that reads as failure. Panels are
+    the OCR keyword layer's job and are reported separately, along with what
+    the two together do - which is what the app actually runs."""
+    rows, keywords = [], None
     for key, d in results.items():
         name, m = key.rsplit("|", 1)
         if m != mode:
             continue
         s = d["scores"]
-        by = {k: [v for n, v in s.items() if label_of(n) == k]
+        by = {k: {n: v for n, v in s.items() if label_of(n) == k}
               for k in ("chat", "ghost", "neg")}
-        pos = by["chat"] + by["ghost"]
-        if not pos or not by["neg"]:
+        if name.startswith("OCR keywords"):
+            keywords = by
             continue
-        rows.append((auroc(pos, by["neg"]), name, d["img_size"], by, pos))
+        g, n = list(by["ghost"].values()), list(by["neg"].values())
+        if not g or not n:
+            continue
+        rows.append((auroc(g, n), name, d["img_size"], by))
     if not rows:
         return
 
     title = ("whole image (resized to the model's input)" if mode == "whole"
              else "tiled (native-resolution crops, highest tile wins)")
-    print(f"\n=== {title}")
-    print(f"    {counts['chat']} chat + {counts['ghost']} ghost "
-          f"= {counts['chat'] + counts['ghost']} positives "
-          f"vs {counts['neg']} negatives\n")
-    hdr = (f"{'checkpoint':<18}{'input':>6}{'AUROC':>7}{'ghost':>7}{'chat':>7}"
-           f"{'recall':>9}{'FPR':>6}{'thresh':>9}"
-           f"{'rec@ship':>10}{'fpr@ship':>10}")
+    print(f"\n=== the model, on ghost text - {title}")
+    print(f"    {counts['ghost']} ghost captures vs {counts['neg']} negatives"
+          f"   (the {counts['chat']} chat panels are excluded; see below)\n")
+    hdr = (f"{'checkpoint':<18}{'input':>6}{'AUROC':>8}{'+/-':>7}"
+           f"{'recall@0FP':>12}{'recall':>8}{'FPR':>6}{'thresh':>9}"
+           f"{'rec@ship':>10}")
     print(hdr)
     print("-" * len(hdr))
-    for a, name, size, by, pos in sorted(rows, reverse=True):
-        r, f, t = best_operating_point(pos, by["neg"], max_fpr)
-        rs = sum(1 for x in pos if x >= SHIPPED_THRESHOLD) / len(pos)
-        fs = sum(1 for x in by["neg"] if x >= SHIPPED_THRESHOLD) / len(by["neg"])
-        print(f"{name:<18}{size if size else '-':>6}{a:>7.3f}"
-              f"{auroc(by['ghost'], by['neg']):>7.3f}"
-              f"{auroc(by['chat'], by['neg']):>7.3f}"
-              f"{r:>9.2f}{f:>6.2f}{t:>9.4f}{rs:>10.2f}{fs:>10.2f}")
+    for a, name, size, by in sorted(rows, reverse=True):
+        g, n = list(by["ghost"].values()), list(by["neg"].values())
+        r, f, t = best_operating_point(g, n, max_fpr)
+        r0 = sum(1 for x in g if x > max(n)) / len(g)
+        rs = sum(1 for x in g if x >= SHIPPED_THRESHOLD) / len(g)
+        print(f"{name:<18}{size if size else '-':>6}{a:>8.3f}"
+              f"{_se_auroc(a, len(g), len(n)):>7.3f}"
+              f"{r0:>12.0%}{r:>8.2f}{f:>6.2f}{t:>9.4f}{rs:>10.2f}")
     print("-" * len(hdr))
-    print(f"  ghost / chat are per-group AUROCs against the same negatives.")
-    print(f"  recall / FPR / thresh: the best operating point with "
-          f"FPR <= {max_fpr:.2f}.")
-    print(f"  *@ship: what you get at the app's built-in "
-          f"{SHIPPED_THRESHOLD} threshold.")
+    print(f"  recall@0FP: share of ghost captures scoring above EVERY negative.")
+    print(f"  recall / FPR / thresh: best operating point with FPR <= {max_fpr:.2f}.")
+    print(f"  rec@ship: what you get at the app's built-in {SHIPPED_THRESHOLD}.")
+    print(f"  +/-: Hanley-McNeil standard error. At n={len(rows) and counts['ghost']}"
+          f" positives the top few places are not separable.")
+
+    if not keywords:
+        return
+
+    kc, kn = list(keywords["chat"].values()), list(keywords["neg"].values())
+    hit = sum(1 for x in kc if x >= 0.75)
+    fp = sum(1 for x in kn if x >= 0.75)
+    print(f"\n=== the chat panels, which are the OCR keyword layer's job")
+    print(f"    {hit}/{len(kc)} panels flagged, {fp}/{len(kn)} false positives"
+          f"   (the model is not asked; it never trains on panels)")
+
+    print(f"\n=== both together - max(model, keyword), which is what the app runs")
+    fused = []
+    for a, name, size, by in rows:
+        s_pos, s_neg = [], []
+        for group in ("ghost", "chat"):
+            for n_, v in by[group].items():
+                s_pos.append(max(v, keywords[group].get(n_, 0.0)))
+        for n_, v in by["neg"].items():
+            s_neg.append(max(v, keywords["neg"].get(n_, 0.0)))
+        lo, hi = _zero_fp_band(s_pos, s_neg)
+        caught = sum(1 for x in s_pos if x > lo)
+        fused.append((caught / len(s_pos), name, caught, len(s_pos), lo, hi))
+    for frac, name, caught, total, lo, hi in sorted(fused, reverse=True):
+        band = (f"any threshold in ({lo:.2f}, {hi:.2f}]" if caught == total
+                else f"at a threshold just above {lo:.2f}")
+        print(f"    {name:<18} {caught}/{total} positives, 0 false positives, {band}")
 
 
 def main():

@@ -1,10 +1,6 @@
 # Tiled detection: cut the screenshot into overlapping tiles, score each at
 # native resolution, take the highest. Resizing a whole screenshot to the
 # network input shrinks ghost text to a few pixels; a chat panel survives it.
-#
-# Tiles are sized as a fraction of image height, not a fixed pixel count, so a
-# tile covers the same amount of interface on a laptop screen as on a Retina
-# capture.
 from __future__ import annotations
 
 import argparse
@@ -71,13 +67,10 @@ def iter_tiles(img: Image.Image, tile_frac=0.34, overlap=0.35, min_px=256):
         yield box, img.crop(box)
 
 
-# --------------------------------------------------------------------------
-# Dataset construction
-# --------------------------------------------------------------------------
 
 def build_tile_dataset(src: Path, out: Path, tile_frac=0.34, overlap=0.35,
                        min_px=256, min_frac=0.5, neg_per_pos=3, seed=42,
-                       max_pos_per_image=3) -> dict:
+                       max_pos_per_image=3, allow_orphans: bool = False) -> dict:
     """Turn full screenshots plus region labels into a tile dataset. Tiles from
     a positive image that miss the signal become negatives - identical theme
     and code, differing only by the absence of what is being detected."""
@@ -111,12 +104,9 @@ def build_tile_dataset(src: Path, out: Path, tile_frac=0.34, overlap=0.35,
             else:
                 negatives.append((box, tile))
 
-        # a full-height panel hits many tiles, a ghost line one or two;
-        # uncapped, panels swamp the class
         if len(positives) > max_pos_per_image:
             positives = rng.sample(positives, max_pos_per_image)
 
-        # cap negatives so the tile dataset does not drown in empty editor
         keep_neg = negatives
         if positives:
             budget = max(1, len(positives) * neg_per_pos)
@@ -137,9 +127,23 @@ def build_tile_dataset(src: Path, out: Path, tile_frac=0.34, overlap=0.35,
                      stats["images"], stats["pos"], stats["neg"])
         _ = variant
 
-    # unlabelled images (browser screenshots) carry no signal, so every tile
-    # is a negative; without them the model never sees a non-editor
     known = set(labels)
+    orphans = {folder: [p for p in sorted((src / folder).glob("*.png"))
+                        if f"{folder}/{p.name}" not in known]
+               for folder in ("copilot_active", "no_copilot")
+               if (src / folder).exists()}
+    stale = sum(len(v) for v in orphans.values())
+    if stale and not allow_orphans:
+        raise SystemExit(
+            f"{stale} image(s) under {src} are missing from labels.json "
+            f"({len(orphans.get('copilot_active', []))} positive, "
+            f"{len(orphans.get('no_copilot', []))} negative).\n"
+            "They are left over from an earlier run: a full "
+            "`python3 -m comas.synthetic` rewrites labels.json, and older "
+            "builds did not clear the image folders first.\n"
+            "Regenerate the folder from scratch, or pass --allow-orphans to "
+            "tile the unlabelled negatives anyway.")
+
     for folder in ("copilot_active", "no_copilot"):
         d = src / folder
         if not d.exists():
@@ -158,11 +162,6 @@ def build_tile_dataset(src: Path, out: Path, tile_frac=0.34, overlap=0.35,
                 stats["neg_unlabelled"] = stats.get("neg_unlabelled", 0) + 1
             stats["images"] += 1
     return stats
-
-
-# --------------------------------------------------------------------------
-# Inference
-# --------------------------------------------------------------------------
 
 class TiledScorer:
     """Scores every tile at native resolution, reports the maximum and which
@@ -225,6 +224,9 @@ def main():
     ap.add_argument("--max-pos-per-image", type=int, default=3,
                     help="caps panel tiles so they do not swamp ghost tiles")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--allow-orphans", action="store_true",
+                    help="tile images that labels.json does not describe "
+                         "instead of stopping; they become negatives")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -233,7 +235,7 @@ def main():
     stats = build_tile_dataset(args.src, args.out, args.tile_frac,
                                args.overlap, 256, args.min_frac,
                                args.neg_per_pos, args.seed,
-                               args.max_pos_per_image)
+                               args.max_pos_per_image, args.allow_orphans)
     log.info("Done. %d images -> %d positive / %d negative tiles under %s",
              stats["images"], stats["pos"], stats["neg"], args.out)
     log.info("%d of the negatives came from positive images "

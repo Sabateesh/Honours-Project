@@ -3,7 +3,15 @@
 # Half the negatives put a different panel (Outline, Extensions, Source
 # Control, Search) in the same right-hand slot, so the model cannot separate
 # the classes on panel position alone. Comments stay in the corpus for the same
-# reason: they are grey too.
+# reason: they are dim too.
+#
+# Nothing dim is drawn into a negative on purpose - see the INLAY_HINTS note
+# for what used to be, why it was removed, and what that costs.
+#
+# A suggestion is NOT one flat grey - see GHOST_DIM_RANGE below. It carries the
+# editor's syntax colours, dimmed toward the background by an amount that varies
+# from capture to capture. The italic face is what every real suggestion has in
+# common, and it is the feature this data is built to teach.
 from __future__ import annotations
 
 import argparse
@@ -25,8 +33,6 @@ PY_KEYWORDS = {
     "while", "with", "yield", "self",
 }
 
-# Words that would let the OCR keyword detector (or the fusion text branch)
-# cheat instead of learning the visual ghost-text signal.
 BANNED_WORDS = re.compile(r"copilot|cursor|ghost", re.IGNORECASE)
 
 THEMES = [
@@ -74,17 +80,48 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ]
 
-# Real assistants render suggestions in italic, not just a dimmer colour.
+
 ITALIC_FONT_CANDIDATES = [
-    "/System/Library/Fonts/Menlo.ttc",          # Menlo Italic lives at index 1
+    "/System/Library/Fonts/Menlo.ttc",
+    "/Library/Fonts/Menlo.ttc",
+    "/System/Library/Fonts/Courier.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Oblique.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationMono-Italic.ttf",
 ]
 
+_MAX_FACES = 32
+
+GHOST_FACE_NOTE: str | None = None
+
+
+def _faces(path: str, px: int):
+    """Every face in a font file or collection, as (index, family, style)."""
+    for index in range(_MAX_FACES):
+        try:
+            f = ImageFont.truetype(path, px, index=index)
+        except (OSError, IOError):
+            return
+        try:
+            family, style = f.getname()
+        except Exception:
+            family, style = Path(path).stem, ""
+        yield index, f, family, style or ""
+
+
+def _find_italic(px: int):
+    """The first true italic/oblique face on disk. Bold-italic is skipped: the
+    suggestion is slanted, not heavier."""
+    for path in ITALIC_FONT_CANDIDATES:
+        if not Path(path).exists():
+            continue
+        for index, f, family, style in _faces(path, px):
+            low = style.lower()
+            if ("italic" in low or "oblique" in low) and "bold" not in low:
+                return f, f"{family} {style} ({Path(path).name}, index {index})"
+    return None, None
+
 WINDOW_SIZES = [(1280, 800), (1440, 900), (1512, 982), (1680, 1050)]
 
-# Panel text is deliberately generic. None of it contains the OCR detector's
-# keywords, so the CNN cannot pass by reading the panel - it has to see it.
 CHAT_PROMPTS = [
     "how do I reverse a linked list in place",
     "why is this loop off by one",
@@ -120,15 +157,26 @@ COMPOSER_HINTS = ["Ask anything", "Send a message", "Type a question",
 
 NEG_PANELS = ["outline", "extensions", "scm", "search"]
 
-# VS Code inlay hints: grey type annotations in the same colour as ghost text,
-# and the most confusable legitimate feature. Drawn into BOTH classes - if they
-# only appeared in negatives the model would learn "grey annotation = innocent".
-INLAY_HINTS = [": str", ": int", ": bool", ": float", " -> None",
-               ": list[str]", ": dict", " -> bool", ": Path", ": Optional[int]"]
 
-# Shortest suggestion worth generating. Below this the "ghost text" is a
-# couple of characters and the image is effectively a mislabelled negative.
 MIN_GHOST_CHARS = 8
+
+
+GHOST_DIM_RANGE = (0.22, 0.50)
+
+GHOST_FLAT_P = 0.30
+
+
+def _rgb(color) -> tuple[int, int, int]:
+    if isinstance(color, tuple):
+        return color
+    c = color.lstrip("#")
+    return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _blend(fg, bg, t: float) -> tuple[int, int, int]:
+    """t of the way from fg toward bg. t=0 is the syntax colour untouched."""
+    f, b = _rgb(fg), _rgb(bg)
+    return tuple(int(round(f[i] + (b[i] - f[i]) * t)) for i in range(3))
 
 OUTLINE_ROWS = ["main", "load_corpus", "tokenize_line", "render", "Config",
                 "__init__", "run", "parse_args", "Detector", "detect", "flush"]
@@ -206,20 +254,32 @@ class _ScaledDraw:
 
 
 def _load_font(size: int, scale: int = 1, italic: bool = False):
-    candidates = ITALIC_FONT_CANDIDATES if italic else FONT_CANDIDATES
-    for path in candidates:
+    if italic:
+        global GHOST_FACE_NOTE
+        f, note = _find_italic(size * scale)
+        if f is None:
+            # Falling back to the upright face here is what produced a whole
+            # positive class with no font signal. Refuse instead.
+            raise RuntimeError(
+                "No italic monospace face found, so ghost text would render "
+                "upright and every positive would be unlabelled-looking. "
+                "Install one (macOS ships Menlo Italic) or add its path to "
+                "ITALIC_FONT_CANDIDATES.\n  searched: "
+                + "\n            ".join(ITALIC_FONT_CANDIDATES)
+                + "\n  run `python3 -m comas.synthetic --list-fonts` to see "
+                  "which faces are visible.")
+        GHOST_FACE_NOTE = note
+        return _LogicalFont(f, scale) if scale != 1 else f
+
+    for path in FONT_CANDIDATES:
         if not Path(path).exists():
             continue
         try:
-            # Menlo.ttc is a collection; index 1 is the italic face
-            if italic and path.endswith(".ttc"):
-                f = ImageFont.truetype(path, size * scale, index=1)
-            else:
-                f = ImageFont.truetype(path, size * scale)
+            f = ImageFont.truetype(path, size * scale)
         except (OSError, IOError):
             continue
         return _LogicalFont(f, scale) if scale != 1 else f
-    return _load_font(size, scale) if italic else ImageFont.load_default()
+    return ImageFont.load_default()
 
 
 def tokenize_line(line: str) -> list[tuple[str, str]]:
@@ -437,10 +497,17 @@ def _draw_neg_panel(draw, kind, x0, top, bottom, W, theme, rng, font_ui):
 
 
 def _draw_code_line(draw, x, y, tokens, theme, font, ghost=False,
-                    ghost_font=None):
+                    ghost_font=None, dim=0.35, flat=None):
+    """Ghost tokens keep their syntax colour and are dimmed toward the
+    background by `dim`, unless `flat` overrides every token with one colour."""
     f = (ghost_font or font) if ghost else font
     for tok, kind in tokens:
-        color = theme["ghost"] if ghost else theme[kind]
+        if not ghost:
+            color = theme[kind]
+        elif flat is not None:
+            color = flat
+        else:
+            color = _blend(theme[kind], theme["bg"], dim)
         draw.text((x, y), tok, fill=color, font=f)
         x += f.getlength(tok)
     return x
@@ -448,13 +515,18 @@ def _draw_code_line(draw, x, y, tokens, theme, font, ghost=False,
 
 def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
                       theme, rng, filenames, panel=None, scale: int = 1,
-                      inlay: bool = False, lightbulb: bool = False):
+                      lightbulb: bool = False):
     W, H = rng.choice(WINDOW_SIZES)
     font_size = rng.randint(12, 15)
     font = _load_font(font_size, scale)
     font_italic = _load_font(font_size, scale, italic=True)
     font_ui = _load_font(12, scale)
     line_h = font_size + 7
+
+    # How this capture's editor colours a suggestion. Drawn once per image
+    # because a real editor is consistent within a screenshot.
+    ghost_dim = rng.uniform(*GHOST_DIM_RANGE)
+    ghost_flat = theme["ghost"] if rng.random() < GHOST_FLAT_P else None
 
     # Layout below is written in 1x units; the canvas is scale x larger.
     img = Image.new("RGB", (W * scale, H * scale), theme["bg"])
@@ -496,8 +568,9 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
             prefix, first_ghost = ghost_lines[0]
             x_end = _draw_code_line(draw, code_x, y, tokenize_line(prefix), theme, font)
             cursor_x = x_end
-            gx1 = _draw_code_line(draw, x_end, y, [(first_ghost, "default")],
-                                  theme, font, ghost=True, ghost_font=font_italic)
+            gx1 = _draw_code_line(draw, x_end, y, tokenize_line(first_ghost),
+                                  theme, font, ghost=True, ghost_font=font_italic,
+                                  dim=ghost_dim, flat=ghost_flat)
             # remember exactly where the dim text landed, so tiles covering it
             # can be labelled without guessing
             ghost_box = [x_end, y, gx1, y + line_h]
@@ -506,9 +579,10 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
                 y += line_h
                 if row >= n_visible:
                     break
-                cx1 = _draw_code_line(draw, code_x, y, [(cont, "default")],
+                cx1 = _draw_code_line(draw, code_x, y, tokenize_line(cont),
                                       theme, font, ghost=True,
-                                      ghost_font=font_italic)
+                                      ghost_font=font_italic,
+                                      dim=ghost_dim, flat=ghost_flat)
                 ghost_box[0] = min(ghost_box[0], code_x)
                 ghost_box[2] = max(ghost_box[2], cx1)
                 ghost_box[3] = y + line_h
@@ -521,13 +595,10 @@ def render_screenshot(file_name, lines, start, cursor_line, ghost_lines,
             boxes.append({"kind": "ghost",
                           "box": [int(v) for v in ghost_box]})
         else:
+            # Nothing dim is drawn here any more - see the INLAY_HINTS note.
+            # A line that is not the suggestion gets ordinary syntax colours.
             x_end = _draw_code_line(draw, code_x, y, tokenize_line(lines[idx]),
                                     theme, font)
-            # inlay hints sit where a suggestion would, in the same colour
-            if inlay and lines[idx].strip() and rng.random() < 0.30:
-                _draw_code_line(draw, x_end, y,
-                                [(rng.choice(INLAY_HINTS), "default")],
-                                theme, font, ghost=True)
             if is_cursor:
                 cursor_x = x_end
 
@@ -588,9 +659,6 @@ def make_sample(corpus, rng, variant: str, scale: int = 1):
         if comments:
             cursor_line = rng.choice(comments)
 
-    # Inlay hints appear in every class, so their presence carries no signal.
-    inlay = rng.random() < 0.45
-
     ghost = []
     if with_ghost:
         # a caret on a blank line yields a one-space "suggestion": an image
@@ -618,7 +686,7 @@ def make_sample(corpus, rng, variant: str, scale: int = 1):
                 ghost.append(indent + extra.strip() if extra.strip() else " ")
     return render_screenshot(file_name, lines, start, cursor_line, ghost,
                              theme, rng, filenames, panel=panel, scale=scale,
-                             inlay=inlay, lightbulb=rng.random() < 0.5)
+                             lightbulb=rng.random() < 0.5)
 
 
 def make_image(corpus, rng, variant: str, scale: int = 1):
@@ -648,16 +716,43 @@ def _plan(n_active: int, n_clean: int, hard_neg_frac: float, rng,
 
 def generate(out_dir: Path, n_active: int, n_clean: int, sessions: int,
              seed: int, corpus_roots: list[Path], hard_neg_frac: float = 0.5,
-             scale: int = 1, ghost_only: bool = False):
+             scale: int = 1, ghost_only: bool = False,
+             replace_positives: bool = False):
     rng = random.Random(seed)
     corpus = load_corpus(corpus_roots)
     log.info("Corpus: %d files", len(corpus))
 
-    jobs = _plan(n_active, n_clean, hard_neg_frac, rng, ghost_only)
+   
+    _load_font(13, 1, italic=True)
+    log.info("Ghost-text face: %s", GHOST_FACE_NOTE)
+
+    labels: dict[str, dict] = {}
+    if not replace_positives:
+        gone = 0
+        for folder in ("copilot_active", "no_copilot"):
+            for p in sorted((out_dir / folder).glob("*.png")):
+                p.unlink()
+                gone += 1
+        if gone:
+            log.info("Cleared %d image(s) from a previous run under %s",
+                     gone, out_dir)
+    if replace_positives:
+        sidecar = out_dir / "labels.json"
+        if sidecar.exists():
+            labels = {k: v for k, v in json.loads(sidecar.read_text()).items()
+                      if not k.startswith("copilot_active/")}
+        gone = 0
+        for p in sorted((out_dir / "copilot_active").glob("*.png")):
+            p.unlink()
+            gone += 1
+        log.info("Replacing positives: removed %d old images, kept %d "
+                 "negative labels", gone, len(labels))
+        jobs = _plan(n_active, 0, hard_neg_frac, rng, ghost_only)
+    else:
+        jobs = _plan(n_active, n_clean, hard_neg_frac, rng, ghost_only)
 
     counters: dict[str, int] = {}
     tally: dict[str, int] = {}
-    labels: dict[str, dict] = {}
     for i, (label, variant) in enumerate(jobs):
         session = f"synth{i % sessions:02d}"
         counters[label] = counters.get(label, 0) + 1
@@ -678,10 +773,10 @@ def generate(out_dir: Path, n_active: int, n_clean: int, sessions: int,
         if (i + 1) % 50 == 0:
             log.info("%d / %d", i + 1, len(jobs))
 
-    # Exact pixel locations of every signal, for tiled training (comas.tiling).
     (out_dir / "labels.json").write_text(json.dumps(labels, indent=1))
 
-    log.info("Done: %d active / %d clean under %s", n_active, n_clean, out_dir)
+    log.info("Done: %d active / %d clean under %s", n_active,
+             0 if replace_positives else n_clean, out_dir)
     log.info("Variants: %s", ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
     log.info("Wrote region labels for %d images to %s",
              len(labels), out_dir / "labels.json")
@@ -704,14 +799,36 @@ def main():
     ap.add_argument("--ghost-only", action="store_true",
                     help="every positive is inline ghost text; chat panels are "
                          "left to the OCR keyword detector")
+    ap.add_argument("--replace-positives", action="store_true",
+                    help="redraw copilot_active only, leaving the negatives "
+                         "and their labels untouched")
+    ap.add_argument("--list-fonts", action="store_true",
+                    help="print every face found in the candidate font files "
+                         "and which one ghost text will use, then exit")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s: %(message)s",
                         datefmt="%H:%M:%S")
+
+    if args.list_fonts:
+        for path in ITALIC_FONT_CANDIDATES:
+            if not Path(path).exists():
+                print(f"{path}  -- not on this machine")
+                continue
+            print(path)
+            for index, _f, family, style in _faces(path, 13):
+                low = style.lower()
+                ok = ("italic" in low or "oblique" in low) and "bold" not in low
+                print(f"   index {index}: {family} / {style or '(no style)'}"
+                      f"{'   <- usable' if ok else ''}")
+        f, note = _find_italic(13)
+        chosen = note if f else "NOTHING - generation will refuse to run"
+        print(f"\nghost text will use: {chosen}")
+        return
     generate(args.out, args.n_active, args.n_clean, args.sessions,
              args.seed, args.corpus, args.hard_neg_frac, args.scale,
-             args.ghost_only)
+             args.ghost_only, args.replace_positives)
 
 
 if __name__ == "__main__":

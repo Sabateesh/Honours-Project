@@ -1,10 +1,4 @@
 # Shows exactly what the GUI computes for each screenshot, and why.
-#
-# The GUI collapses everything into one score and one evidence line, which is
-# right for a reviewer and useless for debugging. This prints every stage:
-# the model's raw score, whether OCR recognised an editor, whether the model
-# was gated, which keywords matched, and the final verdict - so a screenshot
-# that "should have been flagged" can be traced to the stage that dropped it.
 from __future__ import annotations
 
 import argparse

@@ -18,9 +18,22 @@ FLUSH_EVERY = 25
 
 
 def _get_pytesseract():
+    """pytesseract is a wrapper: the OCR itself is a separate tesseract binary
+    that pip never installs and PyInstaller cannot discover on its own. Point
+    the wrapper at the copy shipped beside the app, or at the standard Windows
+    install location, before the first call."""
     global _pytesseract
     if _pytesseract is None:
         import pytesseract
+
+        from .resources import find_tesseract
+        exe = find_tesseract()
+        if exe is not None:
+            pytesseract.pytesseract.tesseract_cmd = str(exe)
+            tessdata = exe.parent / "tessdata"
+            if tessdata.exists():
+                os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
+            log.info("Using tesseract at %s", exe)
         _pytesseract = pytesseract
     return _pytesseract
 
@@ -55,8 +68,6 @@ def _ocr_image(path: Path, region: Optional[tuple[float, float]] = None) -> str:
 
 
 def _worker_init():
-    # Tesseract multithreads via OpenMP; unconstrained workers fight over the
-    # cores and run ~6x slower than sequential. One thread each fixes it.
     os.environ["OMP_THREAD_LIMIT"] = "1"
 
 

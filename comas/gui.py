@@ -11,8 +11,8 @@ from tkinter import filedialog
 from PIL import Image, ImageDraw, ImageTk
 
 from .brightspace import BrightspaceDetector
-from .config import load_config
 from .copilot import CopilotDetector, build_ml_scorer, score_from_keywords
+from .resources import load_app_config
 from .ocr import DEFAULT_WORKERS as OCR_WORKERS
 from .ocr import OCRCache
 
@@ -38,15 +38,8 @@ SMALL = (FONT, 11)
 TINY = (FONT, 10)
 
 MODES = ["VSCODE Cheating", "Brightspace Cheating", "VSCODE + Brightspace Cheating"]
-# Calibrated on 27 real screenshots for vscode_tiles_2x.pt applied TILED: 79%
-# recall at 8% false positives. Every checkpoint sits on its own scale, so this
-# number is void the moment config.yaml points somewhere else - re-derive with
-# `python3 eval_vscode.py`. Measured zero-false-positive points elsewhere:
-# vscode_tiles.pt tiled 0.76, vscode_768_v3.pt whole 0.82.
-FLAG_THRESHOLD = 0.9925
+FLAG_THRESHOLD = 0.45
 
-# Keyword scores top out at 0.95, below the model threshold, so the two
-# signals need separate cutoffs or OCR could never raise a flag.
 OCR_FLAG_THRESHOLD = 0.75
 VIEW_W, VIEW_H = 1160, 620
 
@@ -98,7 +91,6 @@ class Button(tk.Label):
         self._bg, self._fg = bg, fg
         self._hover = hover or bg
         self._border = border or bg
-        # keep references or Tk garbage-collects them into blank buttons
         self._img_normal = _pill(self._pill_w, self._pill_h, self._radius,
                                  self._bg, self._border)
         self._img_hover = _pill(self._pill_w, self._pill_h, self._radius,
@@ -135,9 +127,7 @@ class App(tk.Tk):
         self.geometry("1280x960")
         self.minsize(1080, 800)
         self.configure(bg=BG)
-
-        cfg_path = Path("config.yaml")
-        self.cfg = load_config(cfg_path if cfg_path.exists() else None)
+        self.cfg = load_app_config()
         self.ocr_cache = OCRCache(self.cfg.paths.ocr_cache)
 
         self.mode = None
@@ -151,7 +141,6 @@ class App(tk.Tk):
         self._ml_scorer = None
         self._ml_scorer_built = False
         self._ml_status = "not loaded"
-        # invalidates a scan that finishes after the user navigates away
         self._run_id = 0
 
         self._build_header()
@@ -172,7 +161,6 @@ class App(tk.Tk):
             img = Image.open(logo_path)
             img.thumbnail((260, 58), Image.LANCZOS)
             self._logo = ImageTk.PhotoImage(img)
-            # Label, not Button: Aqua draws chrome around the wordmark
             home = tk.Label(inner, image=self._logo, bg=CARD, cursor="hand2")
         else:
             home = tk.Label(inner, text="Carleton University", bg=CARD, fg=INK,
@@ -193,7 +181,6 @@ class App(tk.Tk):
 
         tk.Frame(self, bg=RED, height=3).pack(fill="x")
 
-    # ----- home screen ------------------------------------------------------
 
     def _go_home(self):
         """Logo click. Abandons any in-flight scan's results (the worker thread
@@ -239,8 +226,6 @@ class App(tk.Tk):
                                bg=BG, fg=FAINT, font=SMALL)
         self.status.pack()
 
-        # the model ships separately; say so rather than silently
-        # degrading to OCR, which misses most inline ghost text
         if not self.cfg.paths.checkpoint.exists():
             warn = tk.Frame(wrap, bg="#fff4e5", highlightbackground="#f0c890",
                             highlightthickness=1)
@@ -293,9 +278,8 @@ class App(tk.Tk):
     def _get_ml_scorer(self):
         if not self._ml_scorer_built:
             self._ml_scorer_built = True
-            cfg_path = Path("config.yaml")
             try:
-                self._ml_scorer = build_ml_scorer(cfg_path if cfg_path.exists() else None)
+                self._ml_scorer = build_ml_scorer(self.cfg)
                 self._ml_status = "loaded" if self._ml_scorer else "no trained checkpoint found"
             except Exception as e:
                 self._ml_scorer = None
@@ -310,8 +294,7 @@ class App(tk.Tk):
         if use_copilot:
             ml_scorer = self._get_ml_scorer()
             self._queue.put(("model_status", self._ml_status))
-            # OCR always runs: keywords are the only way to tell a chat
-            # panel from inline ghost text, which the reviewer is shown
+
             copilot = CopilotDetector(ocr_cache=self.ocr_cache,
                                       ml_scorer=ml_scorer)
         brightspace = BrightspaceDetector(self.ocr_cache) if use_brightspace else None
@@ -347,14 +330,12 @@ class App(tk.Tk):
                                                      ev.weak_matches)[0]
                 r["assistant_kind"] = self._assistant_kind(ev)
                 r["score"] = max(r["score"], ev.score)
-                # readable interface text is verifiable evidence, so it
-                # outranks any model score in the queue
+
                 if ev.strong_matches:
                     r["score"] = 1.0
                 r["left_vscode"] = self._left_vscode(
                     ev.is_ide, ev.ocr_ran, combined=use_brightspace)
                 r["score"] = max(r["score"], r["left_vscode"])
-                # tiled inference reports which tile fired
                 if hasattr(copilot.ml_scorer, "box_for"):
                     r["box"] = copilot.ml_scorer.box_for(p)
             if brightspace:
@@ -482,9 +463,7 @@ class App(tk.Tk):
         tk.Label(thr, text="FLAG THRESHOLD", bg=BG, fg=FAINT,
                  font=(FONT, 9, "bold")).pack(side="left", padx=(0, 8))
 
-        # the useful range moves with the checkpoint - a tiled model bunches
-        # its scores into 0.98-1.00, a whole-image one spreads them over
-        # 0.7-1.0 - so the slider stays fine-grained across the whole span
+       
         self.thr_slider = tk.Scale(
             thr, from_=0.50, to=1.0, resolution=0.0001,
             orient="horizontal", length=300, bg=BG, fg=INK,
@@ -503,8 +482,8 @@ class App(tk.Tk):
         self.thr_entry.bind("<FocusOut>", self._on_threshold_typed)
 
         # measured operating points, see FLAG_THRESHOLD
-        for label, value in (("strict", 0.9967), ("default", FLAG_THRESHOLD),
-                             ("loose", 0.9882)):
+        for label, value in (("strict", 0.90), ("default", FLAG_THRESHOLD),
+                             ("loose", 0.25)):
             Button(thr, label, command=lambda v=value: self._set_threshold(v),
                    bg=CARD, fg=DIM, hover="#f1f5f9", border=BORDER,
                    font=(FONT, 10), padx=10, pady=5).pack(side="left", padx=3)
@@ -603,8 +582,6 @@ class App(tk.Tk):
         self._set_threshold(max(0.0, min(1.0, v)))
 
     def _set_threshold(self, value):
-        # setting the slider fires _on_threshold, which syncs the entry box
-        # and refilters; doing it here as well would filter twice
         self.thr_slider.set(value)
 
     def _refilter(self):
@@ -640,7 +617,6 @@ class App(tk.Tk):
         r = self.results[self.result_idx]
         img = Image.open(r["path"]).convert("RGB")
         full_w, full_h = img.size
-        # fit to the live stage size; LANCZOS keeps small UI text legible
         sw = max(self._stage.winfo_width() - 24, 200)
         sh = max(self._stage.winfo_height() - 24, 200)
         img.thumbnail((min(sw, VIEW_W * 2), min(sh, VIEW_H * 2)), Image.LANCZOS)
@@ -716,7 +692,6 @@ class App(tk.Tk):
 
         self.summary.config(text=f"Report saved to {out}", fg=INK)
 
-    # ----- utils ------------------------------------------------------------
 
     def _clear_body(self):
         for child in self.body.winfo_children():

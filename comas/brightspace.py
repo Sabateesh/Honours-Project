@@ -63,31 +63,20 @@ def find_markers(text: str) -> tuple[list[str], list[str]]:
     return on, off
 
 
-# This detector uses no model, so its output is a decision rather than a
-# confidence: the quiz markers are either read or they are not. LEFT_QUIZ sits
-# at the top of the scale so a tab-leave clears the flag threshold at every
-# slider position - at 0.95 it fell below the model's calibrated cutoff of
-# 0.9925 and a confirmed tab-leave was reported to nobody.
+
 LEFT_QUIZ_SCORE = 1.0
 ON_QUIZ_SCORE = 0.05
 
 
 def score_markers(on: list[str], off: list[str]) -> tuple[float, str]:
-    # The quiz should be on screen during the exam, so any capture without it
-    # is a tab-leave. Off-task keywords only name the site in the evidence
-    # line; they do not drive the score.
     if on:
         return ON_QUIZ_SCORE, "on_quiz"
     return LEFT_QUIZ_SCORE, "left_quiz"
 
 
-# IDE recognition lives with the VS Code detector; imported here because
-# combined mode needs it to tell a legitimate coding capture from a tab-leave.
 from .copilot import IDE_KEYWORDS, looks_like_ide  # noqa: E402,F401
 
 
-# Tab titles and the URL bar sit in the top strip, so an on-quiz capture is
-# usually settled from a crop; anything else is confirmed on the full frame.
 TOP_STRIP = (0.0, 0.25)
 
 

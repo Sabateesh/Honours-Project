@@ -1,5 +1,4 @@
-# Detects GitHub Copilot and Cursor: OCR keywords for chat panels, a CNN for
-# inline ghost text, optional template matching.
+# Detects GitHub Copilot and Cursor: OCR keywords for chat panels, a CNN for the assistant's ghost text
 
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .config import load_config
+from .config import Config, load_config
 from .ocr import OCRCache
 
 log = logging.getLogger(__name__)
@@ -44,17 +43,12 @@ WEAK_KEYWORDS: dict[str, str] = {
     "ghost text": "copilot",
 }
 
-# VS Code chrome that OCR reads reliably. Two matches are required so a quiz
-# question mentioning a .py file does not register as an editor.
 IDE_KEYWORDS = [
     "explorer", "debug console", "problems", "output", "terminal",
     "spaces: 4", "utf-8", ".py", "outline", "timeline",
 ]
 
-# The tab headers on the assistant side panel. They name no vendor and are
-# ordinary English words, so they count only inside the editor: a Brightspace
-# page or a browser tab reading "Chat" is not an assistant. Inside VS Code the
-# panel is the assistant, so a hit here is the strongest evidence there is.
+
 CHAT_PANEL_KEYWORDS = ("chat", "sessions")
 CHAT_PANEL_SCORE = 1.0
 
@@ -91,9 +85,6 @@ def find_keywords(text: str) -> tuple[list[str], list[str]]:
     low = text.lower()
     strong = [k for k in STRONG_KEYWORDS if k in low]
     weak = [k for k in WEAK_KEYWORDS if k in low]
-    # Panel headers are admitted only once the editor is on screen. The match
-    # is whole-word and rejects a following extension, so chatbot.py and
-    # sessions.py in the explorer stay filenames rather than panel headers.
     if looks_like_ide(low):
         strong += [k for k in CHAT_PANEL_KEYWORDS
                    if re.search(rf"\b{k}\b(?!\.[a-z0-9])", low)]
@@ -249,9 +240,6 @@ class CopilotDetector:
             if tpl["score"] > ev.score:
                 ev.score, ev.method = tpl["score"], "template"
 
-        # Outside an editor the model is being asked about something it never
-        # saw in training, so its answer is discarded. Keyword matches survive:
-        # reading "GitHub Copilot" on screen is evidence wherever it appears.
         if self.gate_ml_on_ide and ev.ocr_ran and not ev.is_ide:
             ocr_score, ocr_method = score_from_keywords(ev.strong_matches,
                                                         ev.weak_matches)
@@ -364,8 +352,11 @@ class MLScorer:
         return out
 
 
-def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[MLScorer]:
-    cfg = load_config(cfg_path)
+def build_ml_scorer(cfg_or_path) -> Optional[MLScorer]:
+    """Takes a Config or a path to one. The GUI passes an already-resolved
+    Config, because in a frozen build the paths inside it point at the bundle
+    rather than at the working directory."""
+    cfg = cfg_or_path if isinstance(cfg_or_path, Config) else load_config(cfg_or_path)
     if not cfg.paths.checkpoint.exists():
         log.info("No checkpoint at %s; ML signal disabled.", cfg.paths.checkpoint)
         return None
@@ -390,9 +381,6 @@ def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[MLScorer]:
                         pretrained=False).to(device)
     model.load_state_dict(torch.load(cfg.paths.checkpoint, map_location=device))
     model.eval()
-    # The checkpoint's own input size wins. Taking it from the config instead
-    # means swapping in a checkpoint trained at another size scores it at the
-    # wrong resolution - no error raised, just quietly worse numbers.
     img_size = meta.get("img_size", cfg.data.img_size)
     if img_size != cfg.data.img_size:
         log.info("Checkpoint was trained at %dpx; using that rather than the "
@@ -406,8 +394,6 @@ def build_ml_scorer(cfg_path: Optional[Path]) -> Optional[MLScorer]:
     scorer = MLScorer(model, eval_tfms, device, torch,
                       text_encoder=text_encoder, ocr_cache=ocr_cache)
 
-    # A tile-trained checkpoint is applied tile-by-tile at native resolution
-    # instead of resizing the whole screenshot down to the input size.
     tile_cfg = getattr(cfg, "tile", None)
     if tile_cfg is not None and tile_cfg.enabled:
         from .tiling import TiledScorer

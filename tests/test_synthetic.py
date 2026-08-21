@@ -1,7 +1,66 @@
 import random
 
-from comas.synthetic import NEG_PANELS, _plan, _wrap, make_sample
-from PIL import ImageFont
+from comas.synthetic import (
+    NEG_PANELS,
+    _blend,
+    _load_font,
+    _plan,
+    _wrap,
+    make_sample,
+)
+from PIL import Image, ImageDraw, ImageFont
+
+
+def _render(text, font, size=(360, 40)):
+    img = Image.new("L", size, 0)
+    ImageDraw.Draw(img).text((6, 6), text, fill=255, font=font)
+    return img
+
+
+def test_ghost_face_is_slanted_not_just_a_different_file():
+    """The one failure that cannot be seen by glancing at the output folder.
+
+    The italic face used to be taken by collection index - "Menlo.ttc index 1
+    is the italic" - and on macOS index 1 is Menlo BOLD, so every positive was
+    generated with upright ghost text and no font signal at all. Selection is
+    by style name now; this pins that the chosen face actually slants."""
+    upright = _load_font(18)
+    italic = _load_font(18, italic=True)
+    sample = "value = compute(total)"
+    a, b = _render(sample, upright), _render(sample, italic)
+    assert a.tobytes() != b.tobytes(), \
+        "ghost face renders identically to the upright face"
+
+    # A slanted face leans its strokes: the top half of a tall glyph sits to
+    # the right of the bottom half. Bold or a different family would not.
+    def lean(img):
+        px = img.load()
+        w, h = img.size
+        rows = []
+        for y in range(h):
+            xs = [x for x in range(w) if px[x, y] > 96]
+            if xs:
+                rows.append((y, sum(xs) / len(xs)))
+        top = [c for y, c in rows if y < rows[len(rows) // 2][0]]
+        bot = [c for y, c in rows if y > rows[len(rows) // 2][0]]
+        return sum(top) / len(top) - sum(bot) / len(bot)
+
+    assert lean(b) > lean(a) + 1.0, \
+        f"ghost face does not lean (upright {lean(a):.2f}, ghost {lean(b):.2f})"
+
+
+def test_ghost_colour_is_dimmed_syntax_not_flat_grey():
+    """Measured on real captures, a suggestion keeps its syntax hue and is
+    dimmed toward the background. Drawing one flat grey made "grey" and
+    "suggestion" the same feature."""
+    bg = "#1e1e1e"
+    keyword, string = "#569cd6", "#ce9178"
+    dk, ds = _blend(keyword, bg, 0.35), _blend(string, bg, 0.35)
+    assert dk != ds, "dimming collapsed two syntax colours into one"
+    for dim, src in ((dk, keyword), (ds, string)):
+        assert sum(dim) < sum(_blend(src, bg, 0.0)), "dimming did not darken"
+    assert _blend(keyword, bg, 0.0) == (0x56, 0x9c, 0xd6)
+    assert _blend(keyword, bg, 1.0) == (0x1e, 0x1e, 0x1e)
 
 
 def _corpus():
@@ -88,6 +147,33 @@ def test_negative_variants_report_no_regions():
     for variant in ["clean", "hardneg"]:
         _, boxes = make_sample(corpus, rng, variant)
         assert boxes == []
+
+
+def test_no_dim_text_is_drawn_into_a_negative(monkeypatch):
+    """A negative that shows dim trailing text looks positive to a human, and
+    that is label noise on the class that can least afford it.
+
+    The inlay-hint confuser used to append `: str` / `-> None` to the right end
+    of arbitrary lines - comments and `continue` statements included - so 16 of
+    40 clean negatives carried up to 15 apiece, each sitting exactly where a
+    suggestion goes. Region labels never caught it: they stayed empty."""
+    import comas.synthetic as S
+
+    seen = []
+    original = S._draw_code_line
+
+    def spy(draw, x, y, tokens, theme, font, ghost=False, **kw):
+        if ghost:
+            seen.append("".join(tok for tok, _ in tokens))
+        return original(draw, x, y, tokens, theme, font, ghost=ghost, **kw)
+
+    monkeypatch.setattr(S, "_draw_code_line", spy)
+    rng = random.Random(11)
+    corpus = _corpus()
+    for variant in ["clean", "hardneg"]:
+        for _ in range(20):
+            S.make_sample(corpus, rng, variant)
+    assert not seen, f"dim text drawn into a negative: {seen[:5]}"
 
 
 def test_neg_panels_are_not_chat():

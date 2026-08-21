@@ -40,3 +40,4 @@ build/
 *.egg-info/
 config_tiles.yaml
 requirements.txt
+scores_vscode.json

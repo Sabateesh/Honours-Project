@@ -83,9 +83,6 @@ WIKI_ARTICLES = [
 ]
 
 
-# Pixel density for the whole module. Browser negatives must be rendered at the
-# same scale as the IDE images they are mixed with, otherwise resolution itself
-# becomes a shortcut the model can use to separate the classes.
 _SCALE = 1
 
 

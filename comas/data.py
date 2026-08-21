@@ -31,12 +31,6 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-# The synthetic renders are pixel-perfect; real CoMas captures are Retina
-# screenshots that have been scaled, compressed, and slightly blurred along the
-# way. These degradations are applied only at train time so the model cannot
-# key on synthetic crispness. Plain classes (not lambdas) because macOS
-# DataLoader workers spawn and must pickle their transforms.
-
 class RandomDownscale:
     def __init__(self, p=0.5, scale=(0.5, 0.9)):
         self.p = p

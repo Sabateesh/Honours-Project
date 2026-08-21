@@ -1,0 +1,56 @@
+# Training-only config. comas.train writes to paths.checkpoint, so training
+# against config.yaml would overwrite the checkpoint the app currently ships.
+# This one writes somewhere else, leaving vscode_tiles_2x.pt alone so the two
+# can be compared with `python3 eval_vscode.py`.
+#
+#   python3 -m comas.train --config config_retrain.yaml
+#
+# Everything below matches config.yaml except paths.checkpoint. Keep it that
+# way: the point of the retrain is to change the training IMAGES (positives
+# redrawn with syntax-coloured, variably dimmed ghost text) and nothing else.
+data:
+  root: data_tiles/
+  img_size: 512
+  num_workers: 4
+  batch_size: 12
+  val_frac: 0.15
+  test_frac: 0.15
+  seed: 42
+
+augment:
+  downscale_p: 0.5
+  downscale_min: 0.75
+  downscale_max: 0.95
+  jpeg_p: 0.25
+  jpeg_qmin: 65
+  jpeg_qmax: 95
+  blur_p: 0.15
+  blur_min: 0.3
+  blur_max: 0.6
+
+tile:
+  enabled: true
+  tile_frac: 0.34
+  overlap: 0.35
+  min_px: 256
+
+model:
+  use_ocr: false
+  cnn_backbone: resnet50
+  text_encoder: sentence-transformers/all-MiniLM-L6-v2
+  fusion_hidden: 256
+  dropout: 0.3
+
+train:
+  epochs: 5
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  pos_weight_auto: true
+  pos_weight_override: null
+
+paths:
+  checkpoint: checkpoints/vscode_tiles_v2.pt
+  ocr_cache: cache/ocr.json
+
+logging:
+  level: INFO

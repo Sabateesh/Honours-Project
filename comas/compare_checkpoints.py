@@ -1,10 +1,4 @@
 # Scores every saved checkpoint on the SAME set of real screenshots.
-#
-# All model comparisons in this project were made on synthetic data, and the
-# real-data evaluation showed synthetic scores do not predict real behaviour.
-# That leaves an obvious question unanswered: did the changes that improved
-# synthetic AUROC improve anything real? This ranks the checkpoints on real
-# captures so the two orderings can be compared directly.
 from __future__ import annotations
 
 import argparse

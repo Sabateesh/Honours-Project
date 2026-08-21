@@ -1,7 +1,4 @@
-# Per-variant breakdown of the trained model: recall for each way an assistant
-# shows up (ghost text / chat panel / both), false-positive rate for each kind
-# of negative (clean editor / other side panel / browser). The headline AUROC
-# hides exactly this - a model can ace panels and miss ghost text entirely.
+
 from __future__ import annotations
 
 import argparse
@@ -78,8 +75,6 @@ def report(rows, scores, threshold: float) -> str:
         lines.append(f"  {variant:8s} {sum(hits):4d}/{len(hits):<4d} "
                      f"fpr={sum(hits) / len(hits):.3f}")
 
-    # The hardest discrimination in the dataset, isolated. Overall AUROC is
-    # dominated by easy pairs (panel vs browser) and hides this number.
     g_vs_c = auroc(raw.get((1, "ghost"), []), raw.get((0, "clean"), []))
     lines += ["", f"ghost-vs-clean AUROC = {g_vs_c:.3f}  "
                   f"(the fine-grained signal; 0.5 = chance)"]
