@@ -7,10 +7,38 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 set REPO_URL=https://github.com/Sabateesh/Honours-Project
-set MODEL_TAG=v1.1.0
+REM The release that HOLDS THE MODEL FILES, which is not the app version:
+REM releases/download/<MODEL_TAG>/ has to resolve or the download 404s.
+set MODEL_TAG=v1.0.0
 
 echo CoMas Screenshot Triage - installer
 echo.
+
+REM -------------------------------------------------------- UNC check ---
+REM CMD cannot hold a UNC path (\\server\share, or a Parallels / VMware
+REM shared folder such as \\Mac\Home\...) as its current directory. The
+REM `cd /d` above does not stop on failure: CMD prints a notice, falls back
+REM to C:\Windows, and everything below then runs THERE - the venv is
+REM attempted at C:\Windows\.venv and pip is pointed at a directory with no
+REM pyproject.toml. Test where we actually landed, which also catches any
+REM other reason the cd failed.
+set "UNCFAIL="
+if "%~d0"=="\\" set UNCFAIL=1
+if not exist "%CD%\pyproject.toml" set UNCFAIL=1
+
+if defined UNCFAIL (
+    echo This installer cannot run from a network or shared folder:
+    echo   %~dp0
+    echo.
+    echo Windows command scripts cannot use \\server\share paths as a working
+    echo directory, so the install would silently run in C:\Windows instead.
+    echo.
+    echo Fix: copy this whole folder to the PC's own disk - C:\CoMas is a
+    echo      good choice - then run install.bat from there.
+    echo.
+    pause
+    exit /b 1
+)
 
 REM ------------------------------------------------------- path sanity ---
 REM PyTorch ships headers nested nine levels deep. Windows caps paths at 260

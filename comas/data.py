@@ -9,11 +9,17 @@ from typing import Any, Optional
 
 from PIL import Image
 
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(x, **kw):
+        return x
+
 try:
     import torch
     from torch.utils.data import DataLoader, Dataset
     from torchvision import transforms
-    from tqdm import tqdm
     _ML_AVAILABLE = True
 except ImportError:
     _ML_AVAILABLE = False
@@ -24,9 +30,6 @@ except ImportError:
     torch = None
     DataLoader = None
     transforms = None
-
-    def tqdm(x, **kw):
-        return x
 
 log = logging.getLogger(__name__)
 

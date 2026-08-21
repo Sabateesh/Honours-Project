@@ -450,6 +450,19 @@ class App(tk.Tk):
         self.result_idx = 0
         self._clear_body()
 
+        # The model status only ever appeared in the transient "Analyzing..."
+        # line, so a checkpoint that failed to load scrolled past in a
+        # fraction of a second and the app looked like it was working while
+        # running on OCR alone.  Say so where it cannot be missed.
+        if "VSCODE" in (self.mode or "") and self._ml_status != "loaded":
+            warn = tk.Label(
+                self.body,
+                text=f"Ghost-text model not active: {self._ml_status}. "
+                     f"Only text-based detection is running.",
+                bg=RED_TINT, fg=RED_DARK, font=(FONT, 11, "bold"),
+                anchor="w", padx=12, pady=8, wraplength=900, justify="left")
+            warn.pack(fill="x", padx=32, pady=(16, 0))
+
         # toolbar: summary on the left, threshold on the right
         toolbar = tk.Frame(self.body, bg=BG)
         toolbar.pack(fill="x", padx=32, pady=(16, 8))

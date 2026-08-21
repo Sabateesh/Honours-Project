@@ -19,6 +19,8 @@ dependencies = [
     "pytesseract>=0.3.10",
     "pyyaml>=6.0",
     "numpy>=1.24",
+    # cosmetic, but comas/data.py used to gate the model on it
+    "tqdm>=4.65",
 ]
 
 [project.optional-dependencies]
@@ -26,7 +28,6 @@ dependencies = [
 train = [
     "scikit-learn>=1.3",
     "pandas>=2.0",
-    "tqdm>=4.65",
 ]
 dev = ["pytest>=7.4"]
 
